@@ -17,7 +17,6 @@
 ```
 ---
 
-```markdown
 ## ⚙️ 설치 및 실행 방법 (Getting Started)
 
 ### 1. 사전 요구 사항 (Prerequisites)
