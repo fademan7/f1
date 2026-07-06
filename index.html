@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>F1 Telemetry Viewer</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #0b0e13; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
+  #track-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; cursor: grab; user-select: none; }
+  .ui-layer { position: absolute; z-index: 10; color: #eee; background: rgba(10, 12, 16, 0.85); border-radius: 8px; padding: 10px 14px; border: 1px solid rgba(255,255,255,0.05); }
+
+  /* 좌측 상단 */
+  #top-info-panel { top: 16px; left: 16px; display: flex; align-items: center; gap: 12px; padding: 8px 14px; font-weight: bold; font-size: 15px; }
+  #flag-indicator { width: 16px; height: 16px; border-radius: 4px; background: #2ecc71; box-shadow: 0 0 8px rgba(0,0,0,0.5); }
+
+  /* 리더보드 */
+  #leaderboard { top: 70px; left: 16px; width: 300px; max-height: calc(100vh - 120px); overflow: hidden; padding: 6px 10px; }
+  #leaderboard h4 { margin: 0 0 4px 2px; font-size: 11px; color: #888; font-weight: normal; }
+  #leaderboard-list { display: flex; flex-direction: column; gap: 2px; }
+
+  .lb-row { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 5px; cursor: pointer; background: rgba(255,255,255,0.02); transition: background 0.1s; }
+  .lb-row:hover { background: rgba(255,255,255,0.08); }
+  .lb-row.followed { background: rgba(255,230,60,0.15); outline: 1px solid rgba(255,230,60,0.5); }
+  
+  /* 리타이어 차량 흐린색 처리 */
+  .lb-row.dnf { opacity: 0.35; filter: grayscale(100%); }
+
+  /* 순위와 변동 화살표 (세로 정렬) */
+  .lb-pos-container { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 28px; flex-shrink: 0; }
+  .rank-arrow { font-size: 10px; height: 12px; line-height: 12px; font-family: monospace; }
+  .rank-arrow.up { color: #2ecc71; }
+  .rank-arrow.down { color: #e74c3c; }
+  .lb-pos { font-weight: bold; color: #aaa; font-size: 12px; }
+
+  /* 메인 정보 영역 */
+  .lb-main { display: flex; align-items: center; justify-content: space-between; flex-grow: 1; }
+  .lb-left { display: flex; align-items: center; gap: 5px; }
+  .lb-name { font-weight: bold; font-size: 13px; }
+  
+  .lb-right { display: flex; flex-direction: column; align-items: flex-end; }
+  .lb-times { font-size: 10px; color: #999; line-height: 1.2; font-variant-numeric: tabular-nums; }
+
+  /* 태그 */
+  .lb-tag { font-size: 9px; font-weight: bold; padding: 1px 3px; border-radius: 3px; }
+  .lb-tag.fl { background: #a020f0; color: #fff; }
+  .lb-tag.bw { background: #111; color: #fff; border: 1px solid #fff; }
+  .lb-tag.drs { background: #2ecc71; color: #000; }
+
+  /* 타이어 도넛 스타일 (색상 뚜렷하게) */
+  .tyre-chip {
+    width: 14px; height: 14px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 8px; font-weight: bold; background: transparent;
+    border: 2px solid; flex-shrink: 0; box-sizing: border-box;
+  }
+  .tyre-chip.current { width: 17px; height: 17px; font-size: 9px; border-width: 2.5px; }
+  .tyre-chip.prev { opacity: 0.5; }
+
+  /* 우측 상단 텔레메트리 */
+  #telemetry-hud { top: 16px; right: 16px; width: 210px; }
+  #telemetry-hud h4 { margin: 0 0 8px 0; font-size: 14px; font-weight: bold; }
+  #telemetry-hud .row { display: flex; justify-content: space-between; font-size: 13px; margin: 4px 0; }
+  .gauge-label { font-size: 11px; color: #999; margin-top: 8px; }
+  .gauge-bar { width: 100%; height: 9px; background: #333; border-radius: 4px; overflow: hidden; margin-top: 3px; }
+  .gauge-fill { height: 100%; width: 0%; transition: width 0.08s linear; }
+  .throttle-fill { background: #2ecc71; }
+  .brake-fill { background: #e74c3c; }
+
+  /* 재생 컨트롤 및 하단 텍스트 */
+  #playback-controls { bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; width: min(720px, 90vw); }
+  #timeline { flex-grow: 1; cursor: pointer; }
+  button, select { padding: 6px 12px; background: #2a2f3a; color: #fff; border: 1px solid #444; border-radius: 4px; cursor: pointer; }
+  button:hover, select:hover { background: #3a4050; }
+  #time-display { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #status { bottom: 20px; right: 16px; max-width: 300px; font-size: 11px; color: #888; text-align: right; background: transparent; border: none; padding: 0; }
+</style>
+</head>
+<body>
+
+  <canvas id="track-canvas"></canvas>
+
+  <div id="top-info-panel" class="ui-layer">
+    <select id="session-select" style="padding: 4px; background: #2a2f3a; color: #fff; border: 1px solid #444; border-radius: 4px; font-weight: bold; cursor: pointer;">
+      <option value="">데이터 로딩중...</option>
+    </select>
+    <div id="lap-text">Lap - / -</div>
+    <div id="flag-indicator" title="Track Status"></div>
+  </div>
+
+  <div id="leaderboard" class="ui-layer">
+    <h4>순위표</h4>
+    <div id="leaderboard-list"></div>
+  </div>
+
+  <div id="telemetry-hud" class="ui-layer">
+    <h4 id="telemetry-title">차량을 선택하세요</h4>
+    <div class="row"><span>속도</span><span><span id="speed-val">-</span> km/h</span></div>
+    <div class="row"><span>기어</span><span id="gear-val">-</span></div>
+    <div class="row"><span>RPM</span><span id="rpm-val">-</span></div>
+    <div class="gauge-label">Throttle</div>
+    <div class="gauge-bar"><div id="throttle-bar" class="gauge-fill throttle-fill"></div></div>
+    <div class="gauge-label">Brake</div>
+    <div class="gauge-bar"><div id="brake-bar" class="gauge-fill brake-fill"></div></div>
+  </div>
+
+  <div id="status" class="ui-layer">
+    <div id="status-text">세션 로딩 중...</div>
+  </div>
+
+  <div id="playback-controls" class="ui-layer">
+    <button id="btn-play">▶</button>
+    <input type="range" id="timeline" min="0" max="1000" value="0">
+    <span id="time-display">00:00</span>
+    <select id="speed-selector">
+      <option value="1">1x</option>
+      <option value="2">2x</option>
+      <option value="4">4x</option>
+      <option value="8">8x</option>
+    </select>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
