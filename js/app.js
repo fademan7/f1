@@ -59,12 +59,16 @@ let followedDriver = null;
 let isFpvMode = false; 
 
 let denseTrackLine = []; 
-let trackTotalLen = 0; // 트랙 1랩의 총 길이
+let trackTotalLen = 0; 
 let accumulatedDistance = 0;
 
 const rankHistory = {}; 
-let currentCurve = 0; // 레트로 3D 곡률 및 휠 연동 변수
-let carProgressMap = {}; // 차량별 실시간 진행 거리 보관
+let currentCurve = 0; 
+let carProgressMap = {}; 
+
+// 📌 시간 갭 정밀 계산용 변수
+let carHistory = {}; 
+let trackAvgSpeedMs = 55.0; 
 
 function buildWorldMapper(trackLine) {
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -180,9 +184,8 @@ function drawCars(states) {
   }
 }
 
-// 📌 실시간 진행 거리(Progress) 계산 (유령 차 제거 및 갭 계산용)
+// 📌 실시간 진행 거리(Progress) 계산 및 정밀 시간 갭(Gap) 기록
 function calculateCarProgress(states) {
-  carProgressMap = {};
   for (const [dNum, state] of Object.entries(states)) {
     if (!state.visible) { carProgressMap[dNum] = -1; continue; }
     
@@ -194,7 +197,16 @@ function calculateCarProgress(states) {
     
     let lapInfo = provider.getLapInfo(dNum, virtualT);
     let laps = lapInfo ? lapInfo.lapsCompleted : 0;
-    carProgressMap[dNum] = (laps * trackTotalLen) + denseTrackLine[idx].d;
+    let curP = (laps * trackTotalLen) + denseTrackLine[idx].d;
+    carProgressMap[dNum] = curP;
+
+    // 타임라인 히스토리 저장 (최대 10분간 보관하여 정밀 시간차 계산에 사용)
+    if (!carHistory[dNum]) carHistory[dNum] = [];
+    const hist = carHistory[dNum];
+    if (hist.length === 0 || virtualT - hist[hist.length-1].t >= 0.2) { // 0.2초 단위로 기록
+      hist.push({ t: virtualT, p: curP });
+    }
+    if (hist.length > 3000) hist.shift();
   }
 }
 
@@ -218,7 +230,7 @@ function renderFPV(camState, allStates) {
     if (d < minD) { minD = d; myIdx = i; }
   }
 
-  // 📌 1. 레트로 트랙 곡률 결정 (고정된 좌/우 굽힘)
+  // 📌 1. 코너 방향 오류(반전) 완벽 수정 및 시각화 강화
   let lookAheadMeters = 35;
   let lookIdx = (myIdx + lookAheadMeters) % denseTrackLine.length;
   let diff = denseTrackLine[lookIdx].heading - denseTrackLine[myIdx].heading;
@@ -226,22 +238,20 @@ function renderFPV(camState, allStates) {
   while(diff > Math.PI) diff -= Math.PI*2;
   while(diff < -Math.PI) diff += Math.PI*2;
 
+  // 원본 좌표계(북쪽이 +Y) 기준이므로, diff가 양수면 실제 좌회전입니다.
   let targetCurve = 0;
-  if (diff > 0.1) targetCurve = 0.0018;       // Right Turn
-  else if (diff < -0.1) targetCurve = -0.0018; // Left Turn
+  if (diff > 0.05) targetCurve = -0.0025;       // 좌회전 (음수 곡률 -> 왼쪽 휨 -> 휠 좌회전)
+  else if (diff < -0.05) targetCurve = 0.0025;  // 우회전 (양수 곡률 -> 오른쪽 휨 -> 휠 우회전)
 
-  // 트랙과 휠이 동일한 변수(currentCurve)로 보간되어 100% 완벽한 동기화
   currentCurve += (targetCurve - currentCurve) * 0.1;
 
-  // 📌 2. OutRun 스타일 평면 렌더링 (Z클리핑 완전 면제)
+  // 📌 2. OutRun 스타일 평면 렌더링
   const maxLz = 150;
-  const segLen = 2; // 2m 단위 세그먼트
+  const segLen = 2; 
   const shift = accumulatedDistance % segLen;
 
   for (let Lz = maxLz; Lz >= 2; Lz -= segLen) {
-    let z1 = Lz - shift;
-    let z2 = z1 + segLen;
-    
+    let z1 = Lz - shift; let z2 = z1 + segLen;
     if (z1 < 0.5) continue;
     
     let isDark = Math.floor((accumulatedDistance + z1) / 8) % 2 === 0;
@@ -251,8 +261,7 @@ function renderFPV(camState, allStates) {
     let px2 = fw / 2 + (currentCurve * z2 * z2) / z2 * fw * 0.8;
     let py2 = fh / 2 + (1.1 / z2) * fw * 0.8;
     
-    let w1 = (7 / z1) * fw * 0.8;
-    let w2 = (7 / z2) * fw * 0.8;
+    let w1 = (7 / z1) * fw * 0.8; let w2 = (7 / z2) * fw * 0.8;
 
     const overlapY = py2 - 1.5; 
     const h = Math.max(0, py1 - overlapY);
@@ -262,7 +271,6 @@ function renderFPV(camState, allStates) {
       fctx.fillRect(0, overlapY, fw, h + 2);
     }
     
-    // 외곽 흰선
     fctx.fillStyle = '#ffffff';
     fctx.beginPath();
     let outW1 = w1 + (1.8 / z1) * fw * 0.8; let outW2 = w2 + (1.8 / z2) * fw * 0.8;
@@ -270,7 +278,6 @@ function renderFPV(camState, allStates) {
     fctx.lineTo(px2 + outW2, overlapY); fctx.lineTo(px2 - outW2, overlapY);
     fctx.fill();
 
-    // 연석
     fctx.fillStyle = isDark ? '#e74c3c' : '#ffffff'; 
     fctx.beginPath();
     let curbW1 = w1 + (1.2 / z1) * fw * 0.8; let curbW2 = w2 + (1.2 / z2) * fw * 0.8;
@@ -278,7 +285,6 @@ function renderFPV(camState, allStates) {
     fctx.lineTo(px2 + curbW2, overlapY); fctx.lineTo(px2 - curbW2, overlapY);
     fctx.fill();
 
-    // 아스팔트
     fctx.fillStyle = isDark ? '#333333' : '#3a3a3a';
     fctx.beginPath();
     fctx.moveTo(px1 - w1, py1); fctx.lineTo(px1 + w1, py1);
@@ -286,7 +292,7 @@ function renderFPV(camState, allStates) {
     fctx.fill();
   }
 
-  // 📌 3. 차량 렌더링 (진행도 필터링을 통해 유령 차 완벽 제거)
+  // 📌 3. 차량 렌더링 (진행도 필터링으로 유령 차 완벽 제거)
   const myProg = carProgressMap[followedDriver] || 0;
   const carsToDraw = [];
 
@@ -298,7 +304,6 @@ function renderFPV(camState, allStates) {
     
     // 내 차 기준으로 0m ~ 200m '앞에' 있는 차만 렌더링
     if (deltaD > 0 && deltaD < 200) {
-      // 좌우 차선 편차 계산 (Cross Product)
       let p1 = denseTrackLine[myIdx];
       let p2 = denseTrackLine[(myIdx + 1) % denseTrackLine.length];
       let dx = p2.x - p1.x; let dy = p2.y - p1.y;
@@ -307,7 +312,7 @@ function renderFPV(camState, allStates) {
 
       let Lz = deltaD;
       let px = fw / 2 + (lateralOffset + currentCurve * Lz * Lz) / Lz * fw * 0.8;
-      let py = fh / 2 + (0.7 / Lz) * fw * 0.8; // Z 오프셋 (차량 띄움)
+      let py = fh / 2 + (0.7 / Lz) * fw * 0.8; 
       
       carsToDraw.push({ Lz, px, py, meta: provider.drivers[dNum], brk: state.brk });
     }
@@ -353,7 +358,31 @@ function formatLapTime(seconds) { return seconds == null ? '-' : `${Math.floor(s
 function formatTime(seconds) { return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`; }
 function tyreChipHtml(compound, laps, isCurrent) { const color = COMPOUND_COLORS[compound] || '#888'; const letter = COMPOUND_LETTERS[compound] || '?'; return `<div class="${isCurrent ? 'tyre-chip current' : 'tyre-chip prev'}" style="border-color:${color}; color:${color};" title="${compound || '?'} - ${laps} Laps">${laps ?? letter}</div>`; }
 
-// 📌 리더보드에 1위와의 시간차(Gap to Leader) 및 바로 앞차와의 시간차(Interval) 추가
+// 📌 히스토리 기반 타임 갭 정밀 산출 함수
+function getPreciseGap(targetProg, myProg, targetDNum) {
+  if (targetProg <= myProg) return 0;
+  const deltaP = targetProg - myProg;
+
+  const hist = carHistory[targetDNum];
+  if (hist && hist.length > 0) {
+      for (let i = hist.length - 1; i >= 0; i--) {
+          if (hist[i].p <= myProg) {
+              let t_match = hist[i].t;
+              if (i < hist.length - 1) {
+                  const p1 = hist[i].p; const t1 = hist[i].t;
+                  const p2 = hist[i+1].p; const t2 = hist[i+1].t;
+                  if (p2 > p1) {
+                      const ratio = (myProg - p1) / (p2 - p1);
+                      t_match = t1 + ratio * (t2 - t1);
+                  }
+              }
+              return Math.max(0, virtualT - t_match);
+          }
+      }
+  }
+  return deltaP / trackAvgSpeedMs; // 히스토리 부재 시 트랙 평균 속도로 보정
+}
+
 function updateLeaderboard(states) {
   const flaggedDrivers = provider.getFlaggedDrivers(virtualT);
   
@@ -369,21 +398,20 @@ function updateLeaderboard(states) {
        isDrsOpen: state.visible && state.drs === 1,
        isDnf: !state.visible
     };
-  }).sort((a, b) => b.prog - a.prog); // 진짜 진행 거리 기반 정렬
+  }).sort((a, b) => b.prog - a.prog);
 
-  const leaderProg = sortedCars[0]?.prog || 0;
+  const leader = sortedCars[0];
 
   leaderboardListEl.innerHTML = sortedCars.map((r, i) => {
     const rowClasses = ['lb-row'];
     if (r.dNum === followedDriver) rowClasses.push('followed');
     if (r.isDnf) rowClasses.push('dnf'); 
     
-    // 시간차(Gap) 근사치 계산 (초속 60m 기준)
-    let gapLStr = i === 0 ? 'Leader' : `+${((leaderProg - r.prog) / 60).toFixed(1)}s`;
-    let gapPStr = i === 0 ? '' : `+${((sortedCars[i-1].prog - r.prog) / 60).toFixed(1)}s`;
+    // 정밀 시간차(Gap) 렌더링
+    let gapLStr = i === 0 ? 'Leader' : `+${getPreciseGap(leader.prog, r.prog, leader.dNum).toFixed(1)}s`;
+    let gapPStr = i === 0 ? '' : `+${getPreciseGap(sortedCars[i-1].prog, r.prog, sortedCars[i-1].dNum).toFixed(1)}s`;
     if (r.isDnf) { gapLStr = 'DNF'; gapPStr = ''; }
 
-    // 공식 포지션 (순위)
     const posLabel = r.isDnf ? '-' : (i + 1);
 
     let rankArrowHtml = `<div class="rank-arrow" style="opacity:0;">▲</div>`;
@@ -499,7 +527,7 @@ function tick(nowMs) {
   const states = provider.getStateAt(virtualT);
   lastStates = states;
   
-  calculateCarProgress(states); // 순위, 유령차 필터용 진행거리 계산
+  calculateCarProgress(states); 
   applyFollowCamera(states);
   renderMainFrame(states); 
   renderFPV(followedDriver ? states[followedDriver] : null, states); 
@@ -566,6 +594,16 @@ async function loadSession(filename) {
   
   denseTrackLine = densifyTrack(provider.trackLine, 1.0);
   accumulatedDistance = 0;
+
+  // 📌 트랙 절대 평균 속도 계산 (히스토리 보정용 fallback)
+  carHistory = {}; 
+  let bestLapTime = Infinity;
+  for(let dNum in provider.laps) {
+     for(let l of provider.laps[dNum]) {
+         if(l.lapTime && l.lapTime < bestLapTime) bestLapTime = l.lapTime;
+     }
+  }
+  trackAvgSpeedMs = bestLapTime < Infinity ? (trackTotalLen / bestLapTime) : 55.0;
 
   virtualT = provider.startTime; timeline.max = Math.max(1, Math.round(provider.duration * 10));
 
