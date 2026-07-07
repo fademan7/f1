@@ -2,11 +2,9 @@
  * carRenderer.js
  */
 
-// 차체 크기 기준값 (기존 8배에서 보기 좋은 2.5배 스케일로 축소 및 최적화)
 const CAR_LENGTH_BASE = 160;
 const CAR_WIDTH_BASE = 80;
 
-// 위에서 본 F1 차량 실루엣 (비율 좌표)
 const F1_BODY_SHAPE = [
   [0.50, 0.00], [0.40, 0.16], [0.36, 0.44], [0.28, 0.44],
   [0.24, 0.18], [0.08, 0.22], [0.02, 0.48], [-0.16, 0.44],
@@ -16,14 +14,11 @@ const F1_BODY_SHAPE = [
 ];
 
 export class CarRenderer {
-  constructor() {
-    this.trails = new Map();
-  }
-
-  // 타이어 궤적(잔상) 비활성화
+  constructor() { this.trails = new Map(); }
   updateTrail() {} 
   drawTrail() {} 
 
+  // 탑다운 뷰용 (기존)
   drawCar(ctx, screenX, screenY, heading, scale, opts) {
     const { color = '#ffffff', code = '', braking = false, selected = false } = opts;
     const length = CAR_LENGTH_BASE * scale;
@@ -78,7 +73,6 @@ export class CarRenderer {
 
     ctx.restore();
 
-    // 차량 스케일에 맞춰 이름 크기를 쾌적하게 조절
     if (code) {
       ctx.save();
       ctx.font = `bold ${Math.min(36, Math.max(12, 22 * scale))}px 'Segoe UI', sans-serif`;
@@ -89,5 +83,38 @@ export class CarRenderer {
       ctx.fillText(code, screenX, screenY - width * 0.9 - 6);
       ctx.restore();
     }
+  }
+
+  // 🏎️ 1인칭 FPV용 타 차량 뒷모습 렌더링
+  drawRearCar(ctx, x, y, scale, color, isBraking) {
+    ctx.save();
+    ctx.translate(x, y);
+    
+    // 리어 타이어 (크고 두꺼운 사각형)
+    ctx.fillStyle = '#111';
+    ctx.fillRect(-1.4 * scale, -0.6 * scale, 0.5 * scale, 0.9 * scale); // 좌
+    ctx.fillRect(0.9 * scale, -0.6 * scale, 0.5 * scale, 0.9 * scale);  // 우
+    
+    // 리어 윙
+    ctx.fillStyle = '#222';
+    ctx.fillRect(-1.1 * scale, -1.3 * scale, 2.2 * scale, 0.5 * scale); // 윙 하판
+    ctx.fillStyle = color;
+    ctx.fillRect(-1.0 * scale, -1.2 * scale, 2.0 * scale, 0.2 * scale); // 윙 상판 팀 컬러
+    
+    // 바디 (섀시 및 디퓨저)
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(-0.6 * scale, 0.2 * scale);
+    ctx.lineTo(0.6 * scale, 0.2 * scale);
+    ctx.lineTo(0.4 * scale, -0.9 * scale);
+    ctx.lineTo(-0.4 * scale, -0.9 * scale);
+    ctx.fill();
+    
+    // 점멸등 (브레이크 또는 ERS)
+    ctx.fillStyle = isBraking ? '#ff3333' : '#880000';
+    if (isBraking) ctx.boxShadow = `0 0 10px #ff3333`;
+    ctx.fillRect(-0.15 * scale, -0.1 * scale, 0.3 * scale, 0.25 * scale);
+    
+    ctx.restore();
   }
 }
