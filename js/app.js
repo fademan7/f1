@@ -4,19 +4,26 @@
 import { LocalReplayProvider } from './dataProvider.js';
 import { CarRenderer } from './carRenderer.js';
 
+// 캔버스 2개 분리 운영
 const canvas = document.getElementById('track-canvas');
 const ctx = canvas.getContext('2d');
+const fpvCanvas = document.getElementById('fpv-canvas');
+const fctx = fpvCanvas.getContext('2d');
+
+const viewMapWrap = document.getElementById('view-map');
+const viewCockpitWrap = document.getElementById('view-cockpit');
+
 const sessionSelect = document.getElementById('session-select');
 const statusTextEl = document.getElementById('status-text');
 const lapTextEl = document.getElementById('lap-text');
 const flagIndicatorEl = document.getElementById('flag-indicator');
 const btnPlay = document.getElementById('btn-play');
+const btnViewSwitch = document.getElementById('btn-view-switch'); // 스위칭 버튼
 const timeline = document.getElementById('timeline');
 const timeDisplay = document.getElementById('time-display');
 const speedSelector = document.getElementById('speed-selector');
 const leaderboardListEl = document.getElementById('leaderboard-list');
 
-// 🏎️ 콕핏 UI DOM 엘리먼트 
 const cockpitDriverName = document.getElementById('cockpit-driver-name');
 const f1Wheel = document.getElementById('f1-wheel');
 const cpSpeed = document.getElementById('cp-speed');
@@ -38,7 +45,6 @@ const TRACK_STATUS_LABELS = {
   '6': { label: 'VSC', color: '#f39c12' },
   '7': { label: 'VSC END', color: '#e0a030' },
 };
-
 const COMPOUND_COLORS = { SOFT: '#e30613', MEDIUM: '#f9c000', HARD: '#ffffff', INTERMEDIATE: '#2ecc71', WET: '#3498db' };
 const COMPOUND_LETTERS = { SOFT: 'S', MEDIUM: 'M', HARD: 'H', INTERMEDIATE: 'I', WET: 'W' };
 
@@ -54,8 +60,8 @@ let virtualT = 0;
 let lastFrameWallClock = null;
 let lastStates = {};
 let followedDriver = null;
+let isFpvMode = false; // 화면 스위치 상태 플래그
 
-// 스티어링 회전 연산용 변수
 const rankHistory = {}; 
 let lastCockpitHeading = null;
 let lastCockpitVirtualT = null;
@@ -64,17 +70,12 @@ let smoothedWheelAngle = 0;
 function buildWorldMapper(trackLine) {
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const [x, y] of trackLine) {
-    if (x < minX) minX = x;
-    if (x > maxX) maxX = x;
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
   }
   const dataW = maxX - minX || 1;
   const dataH = maxY - minY || 1;
-  return {
-    dataW, dataH,
-    toWorld(x, y) { return [x - minX, dataH - (y - minY)]; },
-  };
+  return { dataW, dataH, toWorld(x, y) { return [x - minX, dataH - (y - minY)]; } };
 }
 
 function toScreen(x, y) {
@@ -83,28 +84,39 @@ function toScreen(x, y) {
 }
 
 function fitToTrack() {
-  const viewW = window.innerWidth;
-  const viewH = window.innerHeight;
-  const padding = 60;
-  const fitZoom = Math.min((viewW - padding * 2) / worldMapper.dataW, (viewH - padding * 2) / worldMapper.dataH);
+  const viewW = viewMapWrap.clientWidth;
+  const viewH = viewMapWrap.clientHeight;
+  const fitZoom = Math.min((viewW - 120) / worldMapper.dataW, (viewH - 120) / worldMapper.dataH);
   camera.zoom = fitZoom;
   camera.panX = (viewW - worldMapper.dataW * fitZoom) / 2;
   camera.panY = (viewH - worldMapper.dataH * fitZoom) / 2;
-  zoomBounds.min = fitZoom * 0.1;
-  zoomBounds.max = fitZoom * 30;
+  zoomBounds.min = fitZoom * 0.1; zoomBounds.max = fitZoom * 30;
 }
 
+// 부모 컨테이너 크기에 맞춰 2개 캔버스를 모두 리사이즈
 function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = window.innerWidth * dpr;
-  canvas.height = window.innerHeight * dpr;
+  
+  canvas.width = viewMapWrap.clientWidth * dpr;
+  canvas.height = viewMapWrap.clientHeight * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  fpvCanvas.width = viewCockpitWrap.clientWidth * dpr;
+  fpvCanvas.height = viewCockpitWrap.clientHeight * dpr;
+  fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
+
+// --- 뷰어 스위칭 로직 ---
+btnViewSwitch.addEventListener('click', () => {
+  isFpvMode = !isFpvMode;
+  document.body.classList.toggle('fpv-mode', isFpvMode);
+  // CSS Transition(0.4초)이 끝난 후 내부 캔버스 크기 재계산
+  setTimeout(() => { resizeCanvas(); fitToTrack(); }, 400); 
+});
 
 function drawTrackLine() {
   const line = provider.trackLine;
   if (line.length < 2) return;
-
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   ctx.strokeStyle = '#ffffff';
   ctx.lineWidth = (TRACK_LINE_WIDTH * camera.zoom) + Math.max(4, 6 * camera.zoom);
@@ -134,49 +146,122 @@ function drawCars(states) {
     const meta = provider.drivers[driverNum] || {};
     const [sx, sy] = toScreen(state.x, state.y);
     carRenderer.drawCar(ctx, sx, sy, -state.heading, camera.zoom, {
-      color: meta.color || '#ffffff',
-      code: meta.code || driverNum,
-      braking: state.brk === 1,
-      selected: driverNum === followedDriver,
+      color: meta.color || '#ffffff', code: meta.code || driverNum, braking: state.brk === 1, selected: driverNum === followedDriver,
     });
   }
 }
 
-function formatLapTime(seconds) {
-  if (seconds == null) return '-';
-  const m = Math.floor(seconds / 60);
-  const s = (seconds % 60).toFixed(3).padStart(6, '0');
-  return `${m}:${s}`;
+// ==========================================
+// 🏎️ 유사 3D 원근 투영 (Perspective Engine)
+// ==========================================
+function renderFPV(camState, allStates) {
+  const fw = viewCockpitWrap.clientWidth;
+  const fh = viewCockpitWrap.clientHeight;
+  
+  // 배경 하늘과 잔디 렌더링
+  fctx.fillStyle = '#1e272e'; // 스카이박스 (밤하늘)
+  fctx.fillRect(0, 0, fw, fh * 0.5);
+  fctx.fillStyle = '#052c11'; // 잔디밭
+  fctx.fillRect(0, fh * 0.5, fw, fh * 0.5);
+
+  if (!camState || !camState.visible) {
+    cockpitDriverName.textContent = '차량을 선택하세요';
+    return;
+  }
+
+  // 삼각함수를 통한 기준 차량의 전방(Forward) / 측면(Right) 벡터 추출
+  const Fx = Math.cos(camState.heading);
+  const Fy = Math.sin(camState.heading);
+  const Rx = Math.sin(camState.heading);
+  const Ry = -Math.cos(camState.heading);
+
+  // 로컬 좌표 변환 및 스크린 분할 함수
+  function project(x, y, zOffset = 0) {
+    const dx = x - camState.x;
+    const dy = y - camState.y;
+    const Lz = dx * Fx + dy * Fy; // 전후 깊이 (Depth)
+    const Lx = dx * Rx + dy * Ry; // 좌우 거리 (Horizontal)
+
+    if (Lz < 0.5) return null; // 카메라 바로 앞이나 뒤에 있는 건 버림 (Frustum Culling)
+
+    const f = 0.8; // 시야각(FOV) 줌 팩터
+    const camZ = 1.0; // 카메라 높이
+    const px = fw / 2 + (Lx / Lz) * fw * f;
+    const py = fh / 2 + ((camZ - zOffset) / Lz) * fw * f;
+    return { px, py, Lz };
+  }
+
+  // 1. 가장 가까운 트랙 노드 탐색
+  let minDist = Infinity;
+  let startIdx = 0;
+  for (let i = 0; i < provider.trackLine.length; i++) {
+    const [tx, ty] = provider.trackLine[i];
+    const dist = Math.hypot(tx - camState.x, ty - camState.y);
+    if (dist < minDist) { minDist = dist; startIdx = i; }
+  }
+
+  // 2. 1인칭 트랙 그리기 (앞으로 80개 포인트만큼 계산)
+  const lookahead = 80;
+  const pts = [];
+  for (let i = 0; i < lookahead; i++) {
+    const idx = (startIdx + i) % provider.trackLine.length;
+    const [tx, ty] = provider.trackLine[idx];
+    const p = project(tx, ty);
+    if (p) pts.push(p);
+  }
+
+  const trackWidth = 7; // 미터 단위 도로 절반 폭 (가정)
+  
+  // 뒤에서부터 앞으로 그리기 (Painter's Algorithm)
+  for (let i = pts.length - 2; i >= 0; i--) {
+    const p1 = pts[i];
+    const p2 = pts[i+1];
+    const w1 = (trackWidth / p1.Lz) * fw * 0.8;
+    const w2 = (trackWidth / p2.Lz) * fw * 0.8;
+
+    // 아스팔트
+    fctx.fillStyle = (i % 2 === 0) ? '#2a2a2a' : '#333333';
+    fctx.beginPath();
+    fctx.moveTo(p1.px - w1, p1.py); fctx.lineTo(p1.px + w1, p1.py);
+    fctx.lineTo(p2.px + w2, p2.py); fctx.lineTo(p2.px - w2, p2.py);
+    fctx.fill();
+    
+    // 연석 (Curbs)
+    fctx.fillStyle = (i % 2 === 0) ? '#ffffff' : '#e74c3c';
+    fctx.fillRect(p1.px - w1 - 4, p1.py - 1, 8, 3); // 좌측
+    fctx.fillRect(p1.px + w1 - 4, p1.py - 1, 8, 3); // 우측
+  }
+
+  // 3. 주변 타 차량 빌보딩 렌더링
+  const carsToDraw = [];
+  for (const [dNum, state] of Object.entries(allStates)) {
+    if (dNum === followedDriver || !state.visible) continue;
+    const p = project(state.x, state.y, 0.4); // 0.4는 차량 바닥을 띄우는 Z오프셋
+    if (p && p.Lz < 250) carsToDraw.push({ p, dNum, meta: provider.drivers[dNum], state }); // 250m 이내만
+  }
+  
+  // 멀리 있는 차부터 그리기
+  carsToDraw.sort((a, b) => b.p.Lz - a.p.Lz);
+  for (const c of carsToDraw) {
+    const scale = (1 / c.p.Lz) * fw * 0.9; 
+    carRenderer.drawRearCar(fctx, c.p.px, c.p.py, scale, c.meta.color, c.state.brk === 1);
+  }
 }
 
-function formatTime(seconds) {
-  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
-  const s = Math.floor(seconds % 60).toString().padStart(2, '0');
-  return `${m}:${s}`;
-}
-
-function tyreChipHtml(compound, laps, isCurrent) {
-  const color = COMPOUND_COLORS[compound] || '#888';
-  const letter = COMPOUND_LETTERS[compound] || '?';
-  const cls = isCurrent ? 'tyre-chip current' : 'tyre-chip prev';
-  return `<div class="${cls}" style="border-color:${color}; color:${color};" title="${compound || '?'} - ${laps}랩">${laps ?? letter}</div>`;
-}
+function formatLapTime(seconds) { return seconds == null ? '-' : `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(3).padStart(6, '0')}`; }
+function formatTime(seconds) { return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`; }
+function tyreChipHtml(compound, laps, isCurrent) { const color = COMPOUND_COLORS[compound] || '#888'; const letter = COMPOUND_LETTERS[compound] || '?'; return `<div class="${isCurrent ? 'tyre-chip current' : 'tyre-chip prev'}" style="border-color:${color}; color:${color};" title="${compound || '?'} - ${laps}랩">${laps ?? letter}</div>`; }
 
 function updateLeaderboard(states) {
   const flaggedDrivers = provider.getFlaggedDrivers(virtualT);
   const rows = Object.entries(states).map(([driverNum, state]) => {
     const meta = provider.drivers[driverNum] || {};
     const lapInfo = provider.getLapInfo(driverNum, virtualT);
-    const isFastest = provider.fastestLap && provider.fastestLap.driver === driverNum;
-    const isFlagged = flaggedDrivers.has(driverNum);
-    const pos = state.visible && state.pos != null ? state.pos : 9999;
-    return { driverNum, meta, lapInfo, isFastest, isFlagged, pos, isDrsOpen: state.visible && state.drs === 1, isDnf: !state.visible };
+    return { driverNum, meta, lapInfo, isFastest: provider.fastestLap && provider.fastestLap.driver === driverNum, isFlagged: flaggedDrivers.has(driverNum), pos: state.visible && state.pos != null ? state.pos : 9999, isDrsOpen: state.visible && state.drs === 1, isDnf: !state.visible };
   });
 
   rows.sort((a, b) => a.pos - b.pos);
-
   leaderboardListEl.innerHTML = rows.map((r) => {
-    const posLabel = r.pos === 9999 ? '-' : r.pos;
     const rowClasses = ['lb-row'];
     if (r.driverNum === followedDriver) rowClasses.push('followed');
     if (r.isDnf) rowClasses.push('dnf'); 
@@ -187,26 +272,18 @@ function updateLeaderboard(states) {
        if (!history) rankHistory[r.driverNum] = { pos: r.pos, t: virtualT, display: '' };
        else {
          if (history.pos !== r.pos) {
-           if (history.pos > r.pos) history.display = `<div class="rank-arrow up">▲</div>`;
-           else history.display = `<div class="rank-arrow down">▼</div>`;
+           history.display = history.pos > r.pos ? `<div class="rank-arrow up">▲</div>` : `<div class="rank-arrow down">▼</div>`;
            history.pos = r.pos; history.t = virtualT;
          }
          if (virtualT - history.t < 4.0 && history.display) rankArrowHtml = history.display;
        }
     }
-
-    const tags = [
-      r.isFastest ? '<span class="lb-tag fl">FL</span>' : '',
-      r.isFlagged ? '<span class="lb-tag bw">B/W</span>' : '',
-      r.isDrsOpen ? '<span class="lb-tag drs">DRS</span>' : ''
-    ].join('');
-
+    const tags = [r.isFastest ? '<span class="lb-tag fl">FL</span>' : '', r.isFlagged ? '<span class="lb-tag bw">B/W</span>' : '', r.isDrsOpen ? '<span class="lb-tag drs">DRS</span>' : ''].join('');
     const currentTyre = r.lapInfo.currentCompound ? tyreChipHtml(r.lapInfo.currentCompound, r.lapInfo.currentTyreLife, true) : '';
     const prevTyres = r.lapInfo.previousStints.map((s) => tyreChipHtml(s.compound, s.laps, false)).join('');
 
-    return `
-      <div class="${rowClasses.join(' ')}" data-driver="${r.driverNum}">
-        <div class="lb-pos-container">${rankArrowHtml}<div class="lb-pos">${posLabel}</div></div>
+    return `<div class="${rowClasses.join(' ')}" data-driver="${r.driverNum}">
+        <div class="lb-pos-container">${rankArrowHtml}<div class="lb-pos">${r.pos === 9999 ? '-' : r.pos}</div></div>
         <div class="lb-main">
           <div class="lb-left"><span class="lb-name">${r.meta.code || r.driverNum}</span>${tags}${currentTyre}${prevTyres}</div>
           <div class="lb-right"><div class="lb-times">B: ${formatLapTime(r.lapInfo.bestLapTime)}</div><div class="lb-times">L: ${formatLapTime(r.lapInfo.lastLapTime)}</div></div>
@@ -215,17 +292,13 @@ function updateLeaderboard(states) {
   }).join('');
 }
 
-leaderboardListEl.addEventListener('mousedown', (e) => {
-  const row = e.target.closest('.lb-row');
-  if (row) setFollowedDriver(row.dataset.driver);
-});
+leaderboardListEl.addEventListener('mousedown', (e) => { const row = e.target.closest('.lb-row'); if (row) setFollowedDriver(row.dataset.driver); });
 
 function updateTopPanelInfo(states) {
   const status = provider.getTrackStatusAt(virtualT);
   const info = TRACK_STATUS_LABELS[status] || TRACK_STATUS_LABELS['1'];
   flagIndicatorEl.style.background = info.color;
   flagIndicatorEl.title = `Status: ${info.label}`;
-
   let maxLap = 0;
   for (const driverNum of Object.keys(states)) {
     const lapInfo = provider.getLapInfo(driverNum, virtualT);
@@ -234,75 +307,48 @@ function updateTopPanelInfo(states) {
   lapTextEl.textContent = `Lap ${Math.max(1, maxLap + 1)} / ${provider.totalLaps || '?'}`;
 }
 
-// 🏎️ 1인칭 콕핏 스티어링 휠 연동 함수
 function updateCockpitHud(states) {
   const state = followedDriver ? states[followedDriver] : null;
-  const meta = followedDriver ? (provider.drivers[followedDriver] || {}) : {};
-
   if (!state || !state.visible) {
-    cockpitDriverName.textContent = '차량을 선택하세요';
     cpSpeed.textContent = '-'; cpGear.textContent = '-'; cpRpm.textContent = '-';
     cpThr.style.width = '0%'; cpBrk.style.width = '0%';
     f1Wheel.style.transform = `rotate(0deg)`;
-    ledNodes.forEach(led => led.className = 'led'); // LED 끄기
-    lastCockpitHeading = null;
-    return;
+    ledNodes.forEach(led => led.className = 'led');
+    lastCockpitHeading = null; return;
   }
-
-  // 1. 기본 LCD 데이터 연동
+  const meta = provider.drivers[followedDriver] || {};
   cockpitDriverName.textContent = `${meta.code || followedDriver} · ${meta.team || ''}`;
-  cpSpeed.textContent = Math.round(state.v);
-  cpGear.textContent = state.gear > 0 ? state.gear : 'N';
-  cpRpm.textContent = Math.round(state.rpm);
-  cpThr.style.width = `${Math.max(0, Math.min(100, state.thr))}%`;
-  cpBrk.style.width = state.brk ? '100%' : '0%';
+  cpSpeed.textContent = Math.round(state.v); cpGear.textContent = state.gear > 0 ? state.gear : 'N'; cpRpm.textContent = Math.round(state.rpm);
+  cpThr.style.width = `${Math.max(0, Math.min(100, state.thr))}%`; cpBrk.style.width = state.brk ? '100%' : '0%';
 
-  // 2. 15구 RPM LED 점등 로직 (8000 ~ 12000 구간)
   const rpmRatio = Math.max(0, Math.min(1, (state.rpm - 8000) / 4000));
   const ledCount = Math.floor(rpmRatio * 15);
-  
   ledNodes.forEach((led, idx) => {
     if (idx < ledCount) {
-      if (idx < 5) led.className = 'led on green';      // 1~5구간 (초록)
-      else if (idx < 10) led.className = 'led on red';  // 6~10구간 (빨강)
-      else led.className = 'led on blue';               // 11~15구간 (파랑)
-    } else {
-      led.className = 'led'; // 꺼짐
-    }
+      if (idx < 5) led.className = 'led on green'; else if (idx < 10) led.className = 'led on red'; else led.className = 'led on blue';
+    } else led.className = 'led';
   });
 
-  // 3. 요 레이트(Yaw Rate)를 이용한 스티어링 휠 역학 회전 연산
   if (lastCockpitHeading !== null && lastCockpitVirtualT !== null) {
     const dt = virtualT - lastCockpitVirtualT;
-    if (dt > 0 && state.v > 10) { // 너무 느릴땐 핸들을 고정
+    if (dt > 0 && state.v > 10) { 
       let dh = state.heading - lastCockpitHeading;
-      // 각도 넘어감 현상(-PI ~ +PI) 방지
       while (dh > Math.PI) dh -= Math.PI * 2;
       while (dh < -Math.PI) dh += Math.PI * 2;
       
-      // 초당 회전 각도(Degree per second) 도출
       let yawRateDeg = (dh * 180 / Math.PI) / dt;
-      
-      // 핸들을 실제보다 시각적으로 더 많이 꺾어보이도록 증폭 (매직 넘버)
-      let targetWheelAngle = -yawRateDeg * 2.0; 
-      targetWheelAngle = Math.max(-150, Math.min(150, targetWheelAngle)); // 150도 락 제한
-      
-      // 선형 보간으로 부드러운 핸들링 연출
+      let targetWheelAngle = -yawRateDeg * 2.0; // 📌 역방향 버그 수정됨 (-)
+      targetWheelAngle = Math.max(-150, Math.min(150, targetWheelAngle)); 
       smoothedWheelAngle += (targetWheelAngle - smoothedWheelAngle) * 0.25;
     }
-  } else {
-    smoothedWheelAngle = 0;
-  }
+  } else smoothedWheelAngle = 0;
   
-  lastCockpitHeading = state.heading;
-  lastCockpitVirtualT = virtualT;
-
-  // CSS 회전 적용 (Canvas +Y축 반전 보정)
+  lastCockpitHeading = state.heading; lastCockpitVirtualT = virtualT;
   f1Wheel.style.transform = `rotate(${smoothedWheelAngle}deg)`;
 }
 
-function renderFrame(states) {
-  ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+function renderMainFrame(states) {
+  ctx.clearRect(0, 0, viewMapWrap.clientWidth, viewMapWrap.clientHeight);
   drawTrackLine();
   drawCars(states);
   timeline.value = Math.round((virtualT - provider.startTime) * 10);
@@ -314,8 +360,8 @@ function applyFollowCamera(states) {
   const state = states[followedDriver];
   if (!state || !state.visible) return;
   const [wx, wy] = worldMapper.toWorld(state.x, state.y);
-  camera.panX = window.innerWidth / 2 - camera.zoom * wx;
-  camera.panY = window.innerHeight / 2 - camera.zoom * wy;
+  camera.panX = viewMapWrap.clientWidth / 2 - camera.zoom * wx;
+  camera.panY = viewMapWrap.clientHeight / 2 - camera.zoom * wy;
 }
 
 function tick(nowMs) {
@@ -331,12 +377,13 @@ function tick(nowMs) {
 
   const states = provider.getStateAt(virtualT);
   lastStates = states;
+  
   applyFollowCamera(states);
-  renderFrame(states);
+  renderMainFrame(states); // 맵 렌더링
+  renderFPV(followedDriver ? states[followedDriver] : null, states); // FPV 렌더링
+  
   updateLeaderboard(states);
   updateTopPanelInfo(states);
-  
-  // 새로 추가된 콕핏 업데이트 호출
   updateCockpitHud(states);
 
   requestAnimationFrame(tick);
@@ -353,32 +400,30 @@ function zoomAt(screenX, screenY, zoomFactor) {
 
 function setFollowedDriver(driverNum) {
   followedDriver = driverNum || null;
-  smoothedWheelAngle = 0; // 차량 변경시 핸들 초기화
-  lastCockpitHeading = null;
+  smoothedWheelAngle = 0; lastCockpitHeading = null;
 }
 
 function handleCanvasClick(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   const clickX = clientX - rect.left;
   const clickY = clientY - rect.top;
-  let hitDriver = null;
-  let hitDist = Infinity;
-
+  let hitDriver = null; let hitDist = Infinity;
   for (const [driverNum, state] of Object.entries(lastStates)) {
     if (!state.visible) continue;
     const [sx, sy] = toScreen(state.x, state.y);
     const dist = Math.hypot(sx - clickX, sy - clickY);
-    const hitRadius = Math.max(CAR_HIT_RADIUS_MIN, 128 * camera.zoom * 0.6);
-    if (dist < hitRadius && dist < hitDist) { hitDriver = driverNum; hitDist = dist; }
+    if (dist < Math.max(CAR_HIT_RADIUS_MIN, 128 * camera.zoom * 0.6) && dist < hitDist) { hitDriver = driverNum; hitDist = dist; }
   }
   setFollowedDriver(hitDriver);
 }
 
 function wireCameraControls() {
   canvas.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.12 : 1 / 1.12); }, { passive: false });
-  canvas.addEventListener('mousedown', (e) => { isDragging = true; dragStart = { x: e.clientX, y: e.clientY }; panStart = { x: camera.panX, y: camera.panY }; canvas.style.cursor = 'grabbing'; });
-  window.addEventListener('mousemove', (e) => { if (!isDragging) return; const dx = e.clientX - dragStart.x; const dy = e.clientY - dragStart.y; if (followedDriver && Math.hypot(dx, dy) > CLICK_MOVE_THRESHOLD) setFollowedDriver(null); camera.panX = panStart.x + dx; camera.panY = panStart.y + dy; });
-  window.addEventListener('mouseup', (e) => { if (!isDragging) return; isDragging = false; canvas.style.cursor = 'grab'; if (Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y) < CLICK_MOVE_THRESHOLD) handleCanvasClick(e.clientX, e.clientY); });
+  canvas.addEventListener('mousedown', (e) => { let isDragging = true; let dragStart = { x: e.clientX, y: e.clientY }; let panStart = { x: camera.panX, y: camera.panY }; canvas.style.cursor = 'grabbing'; 
+    const onMove = (me) => { if (!isDragging) return; const dx = me.clientX - dragStart.x; const dy = me.clientY - dragStart.y; if (followedDriver && Math.hypot(dx, dy) > CLICK_MOVE_THRESHOLD) setFollowedDriver(null); camera.panX = panStart.x + dx; camera.panY = panStart.y + dy; };
+    const onUp = (ue) => { if (!isDragging) return; isDragging = false; canvas.style.cursor = 'grab'; if (Math.hypot(ue.clientX - dragStart.x, ue.clientY - dragStart.y) < CLICK_MOVE_THRESHOLD) handleCanvasClick(ue.clientX, ue.clientY); window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
+  });
   canvas.addEventListener('dblclick', () => { setFollowedDriver(null); fitToTrack(); });
 }
 
@@ -386,7 +431,7 @@ function wirePlaybackControls() {
   btnPlay.addEventListener('click', () => { isPlaying = !isPlaying; btnPlay.textContent = isPlaying ? '⏸' : '▶'; });
   speedSelector.addEventListener('change', (e) => { playbackSpeed = Number(e.target.value); });
   timeline.addEventListener('input', (e) => { virtualT = provider.startTime + provider.duration * (Number(e.target.value) / Number(timeline.max)); });
-  window.addEventListener('resize', resizeCanvas);
+  window.addEventListener('resize', () => { resizeCanvas(); fitToTrack(); });
 }
 
 async function loadSession(filename) {
@@ -399,7 +444,7 @@ async function loadSession(filename) {
   virtualT = provider.startTime; timeline.max = Math.max(1, Math.round(provider.duration * 10));
 
   statusTextEl.innerHTML = `${Object.keys(provider.drivers).length}대 로드 완료.`;
-  resizeCanvas(); fitToTrack(); renderFrame(provider.getStateAt(virtualT));
+  resizeCanvas(); fitToTrack();
 }
 
 async function main() {
@@ -407,7 +452,6 @@ async function main() {
     const res = await fetch('data/index.json');
     if (!res.ok) throw new Error('index.json 없음');
     const sessionList = await res.json();
-    
     sessionSelect.innerHTML = '';
     sessionList.forEach(session => { const opt = document.createElement('option'); opt.value = session.filename; opt.textContent = session.name; sessionSelect.appendChild(opt); });
     sessionSelect.addEventListener('change', (e) => { loadSession(e.target.value); });
