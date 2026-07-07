@@ -9,11 +9,9 @@
   #track-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; cursor: grab; user-select: none; }
   .ui-layer { position: absolute; z-index: 10; color: #eee; background: rgba(10, 12, 16, 0.85); border-radius: 8px; padding: 10px 14px; border: 1px solid rgba(255,255,255,0.05); }
 
-  /* 좌측 상단 */
   #top-info-panel { top: 16px; left: 16px; display: flex; align-items: center; gap: 12px; padding: 8px 14px; font-weight: bold; font-size: 15px; }
   #flag-indicator { width: 16px; height: 16px; border-radius: 4px; background: #2ecc71; box-shadow: 0 0 8px rgba(0,0,0,0.5); }
 
-  /* 리더보드 */
   #leaderboard { top: 70px; left: 16px; width: 300px; max-height: calc(100vh - 120px); overflow: hidden; padding: 6px 10px; }
   #leaderboard h4 { margin: 0 0 4px 2px; font-size: 11px; color: #888; font-weight: normal; }
   #leaderboard-list { display: flex; flex-direction: column; gap: 2px; }
@@ -21,58 +19,90 @@
   .lb-row { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 5px; cursor: pointer; background: rgba(255,255,255,0.02); transition: background 0.1s; }
   .lb-row:hover { background: rgba(255,255,255,0.08); }
   .lb-row.followed { background: rgba(255,230,60,0.15); outline: 1px solid rgba(255,230,60,0.5); }
-  
-  /* 리타이어 차량 흐린색 처리 */
   .lb-row.dnf { opacity: 0.35; filter: grayscale(100%); }
 
-  /* 순위와 변동 화살표 (세로 정렬) */
   .lb-pos-container { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 28px; flex-shrink: 0; }
   .rank-arrow { font-size: 10px; height: 12px; line-height: 12px; font-family: monospace; }
   .rank-arrow.up { color: #2ecc71; }
   .rank-arrow.down { color: #e74c3c; }
   .lb-pos { font-weight: bold; color: #aaa; font-size: 12px; }
 
-  /* 메인 정보 영역 */
   .lb-main { display: flex; align-items: center; justify-content: space-between; flex-grow: 1; }
   .lb-left { display: flex; align-items: center; gap: 5px; }
   .lb-name { font-weight: bold; font-size: 13px; }
-  
   .lb-right { display: flex; flex-direction: column; align-items: flex-end; }
   .lb-times { font-size: 10px; color: #999; line-height: 1.2; font-variant-numeric: tabular-nums; }
 
-  /* 태그 */
   .lb-tag { font-size: 9px; font-weight: bold; padding: 1px 3px; border-radius: 3px; }
   .lb-tag.fl { background: #a020f0; color: #fff; }
   .lb-tag.bw { background: #111; color: #fff; border: 1px solid #fff; }
   .lb-tag.drs { background: #2ecc71; color: #000; }
 
-  /* 타이어 도넛 스타일 (색상 뚜렷하게) */
-  .tyre-chip {
-    width: 14px; height: 14px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 8px; font-weight: bold; background: transparent;
-    border: 2px solid; flex-shrink: 0; box-sizing: border-box;
-  }
+  .tyre-chip { width: 14px; height: 14px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: bold; background: transparent; border: 2px solid; flex-shrink: 0; box-sizing: border-box; }
   .tyre-chip.current { width: 17px; height: 17px; font-size: 9px; border-width: 2.5px; }
   .tyre-chip.prev { opacity: 0.5; }
 
-  /* 우측 상단 텔레메트리 */
-  #telemetry-hud { top: 16px; right: 16px; width: 210px; }
-  #telemetry-hud h4 { margin: 0 0 8px 0; font-size: 14px; font-weight: bold; }
-  #telemetry-hud .row { display: flex; justify-content: space-between; font-size: 13px; margin: 4px 0; }
-  .gauge-label { font-size: 11px; color: #999; margin-top: 8px; }
-  .gauge-bar { width: 100%; height: 9px; background: #333; border-radius: 4px; overflow: hidden; margin-top: 3px; }
-  .gauge-fill { height: 100%; width: 0%; transition: width 0.08s linear; }
-  .throttle-fill { background: #2ecc71; }
-  .brake-fill { background: #e74c3c; }
+  /* 🏎️ CSS로 그린 1인칭 콕핏 스티어링 휠 */
+  #cockpit-view { bottom: 20px; right: 16px; width: 280px; height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; background: transparent; border: none; }
+  #cockpit-driver-name { font-size: 14px; font-weight: bold; text-shadow: 0 2px 4px rgba(0,0,0,0.8); margin-bottom: 10px; color: #fff; }
+  
+  .f1-wheel {
+    width: 250px; height: 140px; position: relative;
+    display: flex; justify-content: center; align-items: center;
+    /* 스티어링 회전 애니메이션의 부드러움을 위한 CSS 트랜지션 */
+    transition: transform 0.05s linear; 
+    transform-origin: center center;
+  }
+  
+  /* 양쪽 핸들 그립 (카본/가죽 질감) */
+  .f1-grip { position: absolute; width: 50px; height: 100%; background: #1a1b1e; box-shadow: inset 0 0 12px rgba(0,0,0,0.9), 0 5px 15px rgba(0,0,0,0.5); z-index: 1; }
+  .f1-grip.left { left: 0; border-radius: 25px 8px 8px 25px; border-left: 2px solid #333; }
+  .f1-grip.right { right: 0; border-radius: 8px 25px 25px 8px; border-right: 2px solid #333; }
+  
+  /* 휠 중앙 카본 플레이트 */
+  .f1-center-plate {
+    width: 170px; height: 110px;
+    background: linear-gradient(135deg, #2a2a2a, #111);
+    border-radius: 12px; position: relative; z-index: 2;
+    padding: 8px; box-sizing: border-box;
+    box-shadow: 0 6px 15px rgba(0,0,0,0.8), inset 0 1px 1px rgba(255,255,255,0.1);
+  }
 
-  /* 재생 컨트롤 및 하단 텍스트 */
+  /* 중앙 LCD 디스플레이 */
+  .f1-lcd {
+    width: 100%; height: 100%; background: #000; border-radius: 6px;
+    border: 2px solid #000; box-shadow: inset 0 0 10px rgba(255,255,255,0.1);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* 15구 RPM LED 바 */
+  .f1-led-bar { display: flex; justify-content: space-between; padding: 4px 6px; background: #0a0a0a; border-bottom: 1px solid #222; }
+  .led { width: 6px; height: 6px; border-radius: 50%; background: #222; transition: background 0.05s; }
+  .led.on.green { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
+  .led.on.red { background: #e74c3c; box-shadow: 0 0 6px #e74c3c; }
+  .led.on.blue { background: #3498db; box-shadow: 0 0 6px #3498db; }
+
+  /* LCD 내부 데이터 표기 */
+  .lcd-data-area { display: flex; flex-grow: 1; }
+  .lcd-gear { width: 40%; display: flex; align-items: center; justify-content: center; font-size: 42px; font-weight: bold; color: #f1c40f; border-right: 1px solid #222; }
+  .lcd-stats { width: 60%; display: flex; flex-direction: column; justify-content: center; padding-left: 8px; gap: 4px; }
+  .stat-row { display: flex; flex-direction: column; }
+  .stat-label { font-size: 8px; color: #888; text-transform: uppercase; }
+  .stat-val { font-size: 16px; font-weight: bold; color: #fff; font-variant-numeric: tabular-nums; }
+  
+  /* 페달 게이지 미니바 */
+  .lcd-pedals { display: flex; height: 8px; }
+  .pedal-bar { height: 100%; width: 50%; display: flex; align-items: flex-end; background: #111; border-top: 1px solid #333; }
+  .pedal-fill { height: 100%; width: 0%; transition: width 0.05s; }
+  .thr-fill { background: #2ecc71; }
+  .brk-fill { background: #e74c3c; }
+
   #playback-controls { bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; width: min(720px, 90vw); }
   #timeline { flex-grow: 1; cursor: pointer; }
   button, select { padding: 6px 12px; background: #2a2f3a; color: #fff; border: 1px solid #444; border-radius: 4px; cursor: pointer; }
   button:hover, select:hover { background: #3a4050; }
   #time-display { font-variant-numeric: tabular-nums; white-space: nowrap; }
-  #status { bottom: 20px; right: 16px; max-width: 300px; font-size: 11px; color: #888; text-align: right; background: transparent; border: none; padding: 0; }
+  #status { top: 16px; right: 16px; font-size: 11px; color: #888; background: transparent; border: none; padding: 0; }
 </style>
 </head>
 <body>
@@ -92,15 +122,36 @@
     <div id="leaderboard-list"></div>
   </div>
 
-  <div id="telemetry-hud" class="ui-layer">
-    <h4 id="telemetry-title">차량을 선택하세요</h4>
-    <div class="row"><span>속도</span><span><span id="speed-val">-</span> km/h</span></div>
-    <div class="row"><span>기어</span><span id="gear-val">-</span></div>
-    <div class="row"><span>RPM</span><span id="rpm-val">-</span></div>
-    <div class="gauge-label">Throttle</div>
-    <div class="gauge-bar"><div id="throttle-bar" class="gauge-fill throttle-fill"></div></div>
-    <div class="gauge-label">Brake</div>
-    <div class="gauge-bar"><div id="brake-bar" class="gauge-fill brake-fill"></div></div>
+  <!-- 🏎️ 새로운 1인칭 콕핏 UI 패널 -->
+  <div id="cockpit-view" class="ui-layer">
+    <div id="cockpit-driver-name">차량을 선택하세요</div>
+    <div class="f1-wheel" id="f1-wheel">
+      <div class="f1-grip left"></div>
+      <div class="f1-center-plate">
+        <div class="f1-lcd">
+          <!-- 상단 15구 RPM LED -->
+          <div class="f1-led-bar" id="rpm-leds">
+            <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
+            <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
+            <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
+          </div>
+          <!-- 중앙 데이터 영역 -->
+          <div class="lcd-data-area">
+            <div class="lcd-gear" id="cp-gear">-</div>
+            <div class="lcd-stats">
+              <div class="stat-row"><span class="stat-label">SPEED</span><span class="stat-val" id="cp-speed">-</span></div>
+              <div class="stat-row"><span class="stat-label">RPM</span><span class="stat-val" id="cp-rpm">-</span></div>
+            </div>
+          </div>
+          <!-- 하단 페달 게이지 -->
+          <div class="lcd-pedals">
+            <div class="pedal-bar"><div class="pedal-fill brk-fill" id="cp-brk"></div></div>
+            <div class="pedal-bar" style="border-left: 1px solid #333;"><div class="pedal-fill thr-fill" id="cp-thr"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="f1-grip right"></div>
+    </div>
   </div>
 
   <div id="status" class="ui-layer">
