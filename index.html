@@ -6,11 +6,30 @@
 <title>F1 Telemetry Viewer</title>
 <style>
   html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #0b0e13; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
-  #track-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; cursor: grab; user-select: none; }
-  .ui-layer { position: absolute; z-index: 10; color: #eee; background: rgba(10, 12, 16, 0.85); border-radius: 8px; padding: 10px 14px; border: 1px solid rgba(255,255,255,0.05); }
+  
+  /* 두 개의 메인 뷰 레이어 (애니메이션 전환용) */
+  .view-layer { position: absolute; transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1); overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  /* 📌 기본 모드 (맵이 전체화면, 콕핏이 우측하단) */
+  body:not(.fpv-mode) #view-map { top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; border-radius: 0; }
+  body:not(.fpv-mode) #view-cockpit { bottom: 20px; right: 16px; width: 340px; height: 220px; z-index: 20; border-radius: 12px; border: 2px solid rgba(255,255,255,0.2); box-shadow: 0 10px 30px rgba(0,0,0,0.8); background: #000; }
+  body:not(.fpv-mode) .f1-wheel { transform: scale(0.65) translateY(40px); }
+
+  /* 📌 FPV 모드 (콕핏이 전체화면, 맵이 우측하단) */
+  body.fpv-mode #view-cockpit { top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; border-radius: 0; border: none; background: #000; }
+  body.fpv-mode #view-map { bottom: 20px; right: 16px; width: 340px; height: 220px; z-index: 20; border-radius: 12px; border: 2px solid rgba(255,255,255,0.2); box-shadow: 0 10px 30px rgba(0,0,0,0.8); }
+  body.fpv-mode .f1-wheel { transform: scale(1.3) translateY(-10px); }
+
+  /* UI 오버레이 기본 설정 */
+  .ui-layer { position: absolute; z-index: 30; color: #eee; background: rgba(10, 12, 16, 0.85); border-radius: 8px; padding: 10px 14px; border: 1px solid rgba(255,255,255,0.05); }
 
   #top-info-panel { top: 16px; left: 16px; display: flex; align-items: center; gap: 12px; padding: 8px 14px; font-weight: bold; font-size: 15px; }
   #flag-indicator { width: 16px; height: 16px; border-radius: 4px; background: #2ecc71; box-shadow: 0 0 8px rgba(0,0,0,0.5); }
+  
+  /* 뷰 스위치 버튼 스타일 */
+  #btn-view-switch { background: #e67e22; color: #fff; border: none; font-weight: bold; border-radius: 4px; padding: 4px 10px; cursor: pointer; transition: 0.2s; }
+  #btn-view-switch:hover { background: #d35400; }
 
   #leaderboard { top: 70px; left: 16px; width: 300px; max-height: calc(100vh - 120px); overflow: hidden; padding: 6px 10px; }
   #leaderboard h4 { margin: 0 0 4px 2px; font-size: 11px; color: #888; font-weight: normal; }
@@ -42,47 +61,23 @@
   .tyre-chip.current { width: 17px; height: 17px; font-size: 9px; border-width: 2.5px; }
   .tyre-chip.prev { opacity: 0.5; }
 
-  /* 🏎️ CSS로 그린 1인칭 콕핏 스티어링 휠 */
-  #cockpit-view { bottom: 20px; right: 16px; width: 280px; height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; background: transparent; border: none; }
-  #cockpit-driver-name { font-size: 14px; font-weight: bold; text-shadow: 0 2px 4px rgba(0,0,0,0.8); margin-bottom: 10px; color: #fff; }
+  /* 콕핏 시점 내부 스타일 */
+  .fpv-overlay-container { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; pointer-events: none; }
+  #cockpit-driver-name { font-size: 18px; font-weight: bold; text-shadow: 0 2px 4px rgba(0,0,0,0.9); margin-bottom: 20px; color: #fff; z-index: 5; }
   
-  .f1-wheel {
-    width: 250px; height: 140px; position: relative;
-    display: flex; justify-content: center; align-items: center;
-    /* 스티어링 회전 애니메이션의 부드러움을 위한 CSS 트랜지션 */
-    transition: transform 0.05s linear; 
-    transform-origin: center center;
-  }
-  
-  /* 양쪽 핸들 그립 (카본/가죽 질감) */
+  .f1-wheel { width: 250px; height: 140px; position: relative; display: flex; justify-content: center; align-items: center; transition: transform 0.05s linear; transform-origin: center center; z-index: 5; }
   .f1-grip { position: absolute; width: 50px; height: 100%; background: #1a1b1e; box-shadow: inset 0 0 12px rgba(0,0,0,0.9), 0 5px 15px rgba(0,0,0,0.5); z-index: 1; }
   .f1-grip.left { left: 0; border-radius: 25px 8px 8px 25px; border-left: 2px solid #333; }
   .f1-grip.right { right: 0; border-radius: 8px 25px 25px 8px; border-right: 2px solid #333; }
   
-  /* 휠 중앙 카본 플레이트 */
-  .f1-center-plate {
-    width: 170px; height: 110px;
-    background: linear-gradient(135deg, #2a2a2a, #111);
-    border-radius: 12px; position: relative; z-index: 2;
-    padding: 8px; box-sizing: border-box;
-    box-shadow: 0 6px 15px rgba(0,0,0,0.8), inset 0 1px 1px rgba(255,255,255,0.1);
-  }
-
-  /* 중앙 LCD 디스플레이 */
-  .f1-lcd {
-    width: 100%; height: 100%; background: #000; border-radius: 6px;
-    border: 2px solid #000; box-shadow: inset 0 0 10px rgba(255,255,255,0.1);
-    display: flex; flex-direction: column; overflow: hidden;
-  }
-
-  /* 15구 RPM LED 바 */
+  .f1-center-plate { width: 170px; height: 110px; background: linear-gradient(135deg, #2a2a2a, #111); border-radius: 12px; position: relative; z-index: 2; padding: 8px; box-sizing: border-box; box-shadow: 0 6px 15px rgba(0,0,0,0.8), inset 0 1px 1px rgba(255,255,255,0.1); }
+  .f1-lcd { width: 100%; height: 100%; background: #000; border-radius: 6px; border: 2px solid #000; box-shadow: inset 0 0 10px rgba(255,255,255,0.1); display: flex; flex-direction: column; overflow: hidden; }
   .f1-led-bar { display: flex; justify-content: space-between; padding: 4px 6px; background: #0a0a0a; border-bottom: 1px solid #222; }
   .led { width: 6px; height: 6px; border-radius: 50%; background: #222; transition: background 0.05s; }
   .led.on.green { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
   .led.on.red { background: #e74c3c; box-shadow: 0 0 6px #e74c3c; }
   .led.on.blue { background: #3498db; box-shadow: 0 0 6px #3498db; }
 
-  /* LCD 내부 데이터 표기 */
   .lcd-data-area { display: flex; flex-grow: 1; }
   .lcd-gear { width: 40%; display: flex; align-items: center; justify-content: center; font-size: 42px; font-weight: bold; color: #f1c40f; border-right: 1px solid #222; }
   .lcd-stats { width: 60%; display: flex; flex-direction: column; justify-content: center; padding-left: 8px; gap: 4px; }
@@ -90,7 +85,6 @@
   .stat-label { font-size: 8px; color: #888; text-transform: uppercase; }
   .stat-val { font-size: 16px; font-weight: bold; color: #fff; font-variant-numeric: tabular-nums; }
   
-  /* 페달 게이지 미니바 */
   .lcd-pedals { display: flex; height: 8px; }
   .pedal-bar { height: 100%; width: 50%; display: flex; align-items: flex-end; background: #111; border-top: 1px solid #333; }
   .pedal-fill { height: 100%; width: 0%; transition: width 0.05s; }
@@ -107,9 +101,46 @@
 </head>
 <body>
 
-  <canvas id="track-canvas"></canvas>
+  <!-- Layer 1: 탑다운 맵 뷰 -->
+  <div id="view-map" class="view-layer">
+    <canvas id="track-canvas"></canvas>
+  </div>
 
+  <!-- Layer 2: 1인칭 콕핏 뷰 -->
+  <div id="view-cockpit" class="view-layer">
+    <canvas id="fpv-canvas"></canvas>
+    <div class="fpv-overlay-container">
+      <div id="cockpit-driver-name">차량을 선택하세요</div>
+      <div class="f1-wheel" id="f1-wheel">
+        <div class="f1-grip left"></div>
+        <div class="f1-center-plate">
+          <div class="f1-lcd">
+            <div class="f1-led-bar" id="rpm-leds">
+              <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
+              <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
+              <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
+            </div>
+            <div class="lcd-data-area">
+              <div class="lcd-gear" id="cp-gear">-</div>
+              <div class="lcd-stats">
+                <div class="stat-row"><span class="stat-label">SPEED</span><span class="stat-val" id="cp-speed">-</span></div>
+                <div class="stat-row"><span class="stat-label">RPM</span><span class="stat-val" id="cp-rpm">-</span></div>
+              </div>
+            </div>
+            <div class="lcd-pedals">
+              <div class="pedal-bar"><div class="pedal-fill brk-fill" id="cp-brk"></div></div>
+              <div class="pedal-bar" style="border-left: 1px solid #333;"><div class="pedal-fill thr-fill" id="cp-thr"></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="f1-grip right"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 오버레이 UI 패널들 -->
   <div id="top-info-panel" class="ui-layer">
+    <button id="btn-view-switch">🔄 뷰 스위치</button>
     <select id="session-select" style="padding: 4px; background: #2a2f3a; color: #fff; border: 1px solid #444; border-radius: 4px; font-weight: bold; cursor: pointer;">
       <option value="">데이터 로딩중...</option>
     </select>
@@ -122,51 +153,14 @@
     <div id="leaderboard-list"></div>
   </div>
 
-  <!-- 🏎️ 새로운 1인칭 콕핏 UI 패널 -->
-  <div id="cockpit-view" class="ui-layer">
-    <div id="cockpit-driver-name">차량을 선택하세요</div>
-    <div class="f1-wheel" id="f1-wheel">
-      <div class="f1-grip left"></div>
-      <div class="f1-center-plate">
-        <div class="f1-lcd">
-          <!-- 상단 15구 RPM LED -->
-          <div class="f1-led-bar" id="rpm-leds">
-            <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
-            <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
-            <div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div><div class="led"></div>
-          </div>
-          <!-- 중앙 데이터 영역 -->
-          <div class="lcd-data-area">
-            <div class="lcd-gear" id="cp-gear">-</div>
-            <div class="lcd-stats">
-              <div class="stat-row"><span class="stat-label">SPEED</span><span class="stat-val" id="cp-speed">-</span></div>
-              <div class="stat-row"><span class="stat-label">RPM</span><span class="stat-val" id="cp-rpm">-</span></div>
-            </div>
-          </div>
-          <!-- 하단 페달 게이지 -->
-          <div class="lcd-pedals">
-            <div class="pedal-bar"><div class="pedal-fill brk-fill" id="cp-brk"></div></div>
-            <div class="pedal-bar" style="border-left: 1px solid #333;"><div class="pedal-fill thr-fill" id="cp-thr"></div></div>
-          </div>
-        </div>
-      </div>
-      <div class="f1-grip right"></div>
-    </div>
-  </div>
-
-  <div id="status" class="ui-layer">
-    <div id="status-text">세션 로딩 중...</div>
-  </div>
+  <div id="status" class="ui-layer"><div id="status-text">세션 로딩 중...</div></div>
 
   <div id="playback-controls" class="ui-layer">
     <button id="btn-play">▶</button>
     <input type="range" id="timeline" min="0" max="1000" value="0">
     <span id="time-display">00:00</span>
     <select id="speed-selector">
-      <option value="1">1x</option>
-      <option value="2">2x</option>
-      <option value="4">4x</option>
-      <option value="8">8x</option>
+      <option value="1">1x</option><option value="2">2x</option><option value="4">4x</option><option value="8">8x</option>
     </select>
   </div>
 
