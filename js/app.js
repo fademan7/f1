@@ -284,7 +284,7 @@ function updateCockpitHud(states) {
       let yawRateDeg = (dh * 180 / Math.PI) / dt;
       
       // 핸들을 실제보다 시각적으로 더 많이 꺾어보이도록 증폭 (매직 넘버)
-      let targetWheelAngle = yawRateDeg * 2.0; 
+      let targetWheelAngle = -yawRateDeg * 2.0; 
       targetWheelAngle = Math.max(-150, Math.min(150, targetWheelAngle)); // 150도 락 제한
       
       // 선형 보간으로 부드러운 핸들링 연출
