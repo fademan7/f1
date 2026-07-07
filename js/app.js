@@ -58,8 +58,11 @@ let lastStates = {};
 let followedDriver = null;
 let isFpvMode = false; 
 
-// 🏎️ 3D 엔진용 변수
 let denseTrackLine = []; 
+let accumulatedDistance = 0;
+
+let smoothFpvX = null;
+let smoothFpvY = null;
 let smoothedCamHeading = null; 
 
 const rankHistory = {}; 
@@ -77,24 +80,45 @@ function buildWorldMapper(trackLine) {
   return { dataW, dataH, toWorld(x, y) { return [x - minX, dataH - (y - minY)]; } };
 }
 
-// 📌 1m 단위 초고밀도 분할 알고리즘 (글로벌 거리 d값 유지로 완벽한 바닥 스크롤 구현)
+// 📌 진화된 맵 제너레이터: 1m 분할 + 10단계 스무딩 필터 (완벽한 곡선 생성)
 function densifyTrack(line, interval = 1.0) {
   if (!line || line.length < 2) return line;
-  const dense = [];
-  let totalDist = 0;
+  let dense = [];
+  
+  // 1단계: 1m 간격으로 점 쪼개기
   for (let i = 0; i < line.length; i++) {
     const p1 = line[i];
     const p2 = line[(i + 1) % line.length];
     const dist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
     const steps = Math.max(1, Math.round(dist / interval));
     for (let j = 0; j < steps; j++) {
-      dense.push({
-        x: p1[0] + (p2[0] - p1[0]) * (j / steps),
-        y: p1[1] + (p2[1] - p1[1]) * (j / steps),
-        d: totalDist + dist * (j / steps) // 출발점부터의 절대 미터(m) 거리 고정값
+      dense.push({ x: p1[0] + (p2[0] - p1[0]) * (j / steps), y: p1[1] + (p2[1] - p1[1]) * (j / steps) });
+    }
+  }
+
+  // 📌 2단계: Laplacian Smoothing (지그재그 궤적을 둥근 곡선으로 깎아냄)
+  const smoothingPasses = 10;
+  for (let pass = 0; pass < smoothingPasses; pass++) {
+    let smoothed = [];
+    for (let i = 0; i < dense.length; i++) {
+      const prev = dense[(i - 1 + dense.length) % dense.length];
+      const curr = dense[i];
+      const next = dense[(i + 1) % dense.length];
+      smoothed.push({
+        x: curr.x * 0.5 + prev.x * 0.25 + next.x * 0.25,
+        y: curr.y * 0.5 + prev.y * 0.25 + next.y * 0.25
       });
     }
-    totalDist += dist;
+    dense = smoothed;
+  }
+
+  // 3단계: 곡선화된 거리(Distance) 재산출
+  let totalDist = 0;
+  for (let i = 0; i < dense.length; i++) {
+    const curr = dense[i];
+    const next = dense[(i + 1) % dense.length];
+    curr.d = totalDist;
+    totalDist += Math.hypot(next.x - curr.x, next.y - curr.y);
   }
   return dense;
 }
@@ -128,17 +152,18 @@ btnViewSwitch.addEventListener('click', () => {
   setTimeout(() => { resizeCanvas(); fitToTrack(); }, 400); 
 });
 
+// 미니맵 렌더링 (지그재그 원본 대신 스무딩된 아름다운 궤적을 그림)
 function drawTrackLine() {
-  const line = provider.trackLine;
+  const line = denseTrackLine;
   if (line.length < 2) return;
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   ctx.strokeStyle = '#ffffff';
   ctx.lineWidth = (TRACK_LINE_WIDTH * camera.zoom) + Math.max(4, 6 * camera.zoom);
   ctx.beginPath();
-  let [sx, sy] = toScreen(line[0][0], line[0][1]);
+  let [sx, sy] = toScreen(line[0].x, line[0].y);
   ctx.moveTo(sx, sy);
   for (let i = 1; i < line.length; i++) {
-    let [px, py] = toScreen(line[i][0], line[i][1]);
+    let [px, py] = toScreen(line[i].x, line[i].y);
     ctx.lineTo(px, py);
   }
   ctx.stroke();
@@ -148,7 +173,7 @@ function drawTrackLine() {
   ctx.beginPath();
   ctx.moveTo(sx, sy);
   for (let i = 1; i < line.length; i++) {
-    let [px, py] = toScreen(line[i][0], line[i][1]);
+    let [px, py] = toScreen(line[i].x, line[i].y);
     ctx.lineTo(px, py);
   }
   ctx.stroke();
@@ -165,9 +190,7 @@ function drawCars(states) {
   }
 }
 
-// ==========================================
 // 🏎️ 진화된 1인칭 FPV 렌더링 엔진 
-// ==========================================
 function renderFPV(camState, allStates) {
   const fw = viewCockpitWrap.clientWidth;
   const fh = viewCockpitWrap.clientHeight;
@@ -179,7 +202,6 @@ function renderFPV(camState, allStates) {
     cockpitDriverName.textContent = '차량을 선택하세요'; return;
   }
 
-  // 1. 내 차와 가장 가까운 트랙 노드 탐색
   let minDist = Infinity; let startIdx = 0;
   for (let i = 0; i < denseTrackLine.length; i++) {
     const pt = denseTrackLine[i];
@@ -187,22 +209,19 @@ function renderFPV(camState, allStates) {
     if (dist < minDist) { minDist = dist; startIdx = i; }
   }
 
-  // 📌 2. 카메라 위치 랙(Lag) 완전 제거로 휠-트랙 엇박자 해결
   let fpvX, fpvY, fpvHeading;
 
   if (minDist < 30) { 
-    // 카메라는 무조건 트랙 중앙(Apex)에 정확히 밀착
     fpvX = denseTrackLine[startIdx].x; 
     fpvY = denseTrackLine[startIdx].y;
 
-    // 코너링을 위해 전방 8m 지점 부드럽게 주시
     const lookIdx = (startIdx + 8) % denseTrackLine.length;
     const targetHeading = Math.atan2(denseTrackLine[lookIdx].y - fpvY, denseTrackLine[lookIdx].x - fpvX);
     
     if (smoothedCamHeading === null) smoothedCamHeading = targetHeading;
     let dh = targetHeading - smoothedCamHeading;
     while (dh > Math.PI) dh -= Math.PI * 2; while (dh < -Math.PI) dh += Math.PI * 2;
-    smoothedCamHeading += dh * 0.4; // 회전 반응 속도 상향
+    smoothedCamHeading += dh * 0.4; 
     
     fpvHeading = smoothedCamHeading;
   } else {
@@ -219,17 +238,15 @@ function renderFPV(camState, allStates) {
     const dx = x - fpvX; const dy = y - fpvY;
     const Lz = dx * Fx + dy * Fy; 
     const Lx = dx * Rx + dy * Ry; 
-    if (Lz < 0.1) return null; // 0.1m 보다 가까운 시야 밖 삭제
+    if (Lz < 0.1) return null; 
     const f = 0.85; const camZ = 1.0; 
     const px = fw / 2 + (Lx / Lz) * fw * f;
     const py = fh / 2 + ((camZ - zOffset) / Lz) * fw * f;
     return { px, py, Lz };
   }
 
-  // 📌 3. 화면 하단 잔디 노출 방지: 카메라보다 15m 뒤쪽부터 렌더링 시작
   const backOffset = 15;
   const drawStartIdx = (startIdx - backOffset + denseTrackLine.length) % denseTrackLine.length;
-  
   const lookaheadPoints = 150 + backOffset; 
   const pts = [];
   for (let i = 0; i < lookaheadPoints; i++) {
@@ -241,25 +258,27 @@ function renderFPV(camState, allStates) {
   for (let j = pts.length - 2; j >= 0; j--) {
     const p1 = pts[j]; const p2 = pts[j+1];
     
-    // 📌 서브픽셀 스크롤링: 트랙의 물리적 거리값(d)에 질감을 고정하여 완벽하게 부드러운 이동 연출
     const isDark = Math.floor(p1.d / 8) % 2 === 0; 
     
-    const h = p1.py - p2.py;
+    // 📌 폴리곤 오버랩: 캔버스 안티앨리어싱에 의한 미세한 1px 틈(계단현상)을 덮어씌움
+    const overlapY = p2.py - 1.5; 
+    
+    const h = p1.py - overlapY;
     if (h > 0) {
       fctx.fillStyle = isDark ? '#4c9634' : '#55a33c'; 
-      fctx.fillRect(0, p2.py, fw, h + 1.5);
+      fctx.fillRect(0, overlapY, fw, h + 2); // 틈을 메꾸기 위한 여유 크기
     }
     
     const w1 = (7 / p1.Lz) * fw * 0.8; 
     const w2 = (7 / p2.Lz) * fw * 0.8;
     
-    // 테두리 흰선
+    // 외곽 흰색 테두리 라인
     fctx.fillStyle = '#ffffff';
     fctx.beginPath();
     const outW1 = w1 + (1.8 / p1.Lz) * fw * 0.8;
     const outW2 = w2 + (1.8 / p2.Lz) * fw * 0.8;
     fctx.moveTo(p1.px - outW1, p1.py); fctx.lineTo(p1.px + outW1, p1.py);
-    fctx.lineTo(p2.px + outW2, p2.py); fctx.lineTo(p2.px - outW2, p2.py);
+    fctx.lineTo(p2.px + outW2, overlapY); fctx.lineTo(p2.px - outW2, overlapY);
     fctx.fill();
 
     // 연석
@@ -268,14 +287,14 @@ function renderFPV(camState, allStates) {
     const curbW1 = w1 + (1.2 / p1.Lz) * fw * 0.8;
     const curbW2 = w2 + (1.2 / p2.Lz) * fw * 0.8;
     fctx.moveTo(p1.px - curbW1, p1.py); fctx.lineTo(p1.px + curbW1, p1.py);
-    fctx.lineTo(p2.px + curbW2, p2.py); fctx.lineTo(p2.px - curbW2, p2.py);
+    fctx.lineTo(p2.px + curbW2, overlapY); fctx.lineTo(p2.px - curbW2, overlapY);
     fctx.fill();
 
     // 아스팔트
     fctx.fillStyle = isDark ? '#333333' : '#3a3a3a';
     fctx.beginPath();
     fctx.moveTo(p1.px - w1, p1.py); fctx.lineTo(p1.px + w1, p1.py);
-    fctx.lineTo(p2.px + w2, p2.py); fctx.lineTo(p2.px - w2, p2.py);
+    fctx.lineTo(p2.px + w2, overlapY); fctx.lineTo(p2.px - w2, overlapY);
     fctx.fill();
   }
 
@@ -407,7 +426,7 @@ function updateCockpitHud(states) {
     } else led.className = 'led';
   });
 
-  // 📌 휠 완벽 동기화
+  // 📌 휠 조향각 스무딩 개선
   let currentHeading = state.fpvHeading !== undefined ? state.fpvHeading : state.heading;
 
   if (lastCockpitHeading !== null && lastCockpitVirtualT !== null) {
@@ -419,11 +438,12 @@ function updateCockpitHud(states) {
       let yawRateDeg = (dh * 180 / Math.PI) / dt;
       let targetWheelAngle = -yawRateDeg * 2.5; 
       targetWheelAngle = Math.max(-150, Math.min(150, targetWheelAngle)); 
-      smoothedWheelAngle += (targetWheelAngle - smoothedWheelAngle) * 0.25;
+      smoothedWheelAngle += (targetWheelAngle - smoothedWheelAngle) * 0.15; // 반응을 더 유려하게 깎음
     }
   } else smoothedWheelAngle = 0;
   
   lastCockpitHeading = currentHeading; lastCockpitVirtualT = virtualT;
+  
   f1Wheel.style.transform = `scale(${scaleFactor}) translateY(${ty}px) rotate(${smoothedWheelAngle}deg)`;
 }
 
@@ -452,6 +472,10 @@ function tick(nowMs) {
     virtualT += deltaSec * playbackSpeed;
     const endT = provider.startTime + provider.duration;
     if (virtualT > endT) virtualT = endT;
+
+    if (followedDriver && lastStates[followedDriver]) {
+      accumulatedDistance += (lastStates[followedDriver].v / 3.6) * deltaSec * playbackSpeed;
+    }
   }
 
   const states = provider.getStateAt(virtualT);
@@ -479,7 +503,8 @@ function zoomAt(screenX, screenY, zoomFactor) {
 
 function setFollowedDriver(driverNum) {
   followedDriver = driverNum || null;
-  smoothedWheelAngle = 0; lastCockpitHeading = null; smoothedCamHeading = null;
+  smoothedWheelAngle = 0; lastCockpitHeading = null; 
+  smoothFpvX = null; smoothedCamHeading = null;
 }
 
 function handleCanvasClick(clientX, clientY) {
@@ -522,6 +547,7 @@ async function loadSession(filename) {
   worldMapper = buildWorldMapper(provider.trackLine);
   
   denseTrackLine = densifyTrack(provider.trackLine, 1.0);
+  accumulatedDistance = 0;
 
   virtualT = provider.startTime; timeline.max = Math.max(1, Math.round(provider.duration * 10));
 
