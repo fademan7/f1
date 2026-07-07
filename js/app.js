@@ -80,45 +80,23 @@ function buildWorldMapper(trackLine) {
   return { dataW, dataH, toWorld(x, y) { return [x - minX, dataH - (y - minY)]; } };
 }
 
-// 📌 진화된 맵 제너레이터: 1m 분할 + 10단계 스무딩 필터 (완벽한 곡선 생성)
 function densifyTrack(line, interval = 1.0) {
   if (!line || line.length < 2) return line;
-  let dense = [];
-  
-  // 1단계: 1m 간격으로 점 쪼개기
+  const dense = [];
+  let totalDist = 0;
   for (let i = 0; i < line.length; i++) {
     const p1 = line[i];
     const p2 = line[(i + 1) % line.length];
     const dist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
     const steps = Math.max(1, Math.round(dist / interval));
     for (let j = 0; j < steps; j++) {
-      dense.push({ x: p1[0] + (p2[0] - p1[0]) * (j / steps), y: p1[1] + (p2[1] - p1[1]) * (j / steps) });
-    }
-  }
-
-  // 📌 2단계: Laplacian Smoothing (지그재그 궤적을 둥근 곡선으로 깎아냄)
-  const smoothingPasses = 10;
-  for (let pass = 0; pass < smoothingPasses; pass++) {
-    let smoothed = [];
-    for (let i = 0; i < dense.length; i++) {
-      const prev = dense[(i - 1 + dense.length) % dense.length];
-      const curr = dense[i];
-      const next = dense[(i + 1) % dense.length];
-      smoothed.push({
-        x: curr.x * 0.5 + prev.x * 0.25 + next.x * 0.25,
-        y: curr.y * 0.5 + prev.y * 0.25 + next.y * 0.25
+      dense.push({
+        x: p1[0] + (p2[0] - p1[0]) * (j / steps),
+        y: p1[1] + (p2[1] - p1[1]) * (j / steps),
+        d: totalDist + dist * (j / steps)
       });
     }
-    dense = smoothed;
-  }
-
-  // 3단계: 곡선화된 거리(Distance) 재산출
-  let totalDist = 0;
-  for (let i = 0; i < dense.length; i++) {
-    const curr = dense[i];
-    const next = dense[(i + 1) % dense.length];
-    curr.d = totalDist;
-    totalDist += Math.hypot(next.x - curr.x, next.y - curr.y);
+    totalDist += dist;
   }
   return dense;
 }
@@ -152,18 +130,17 @@ btnViewSwitch.addEventListener('click', () => {
   setTimeout(() => { resizeCanvas(); fitToTrack(); }, 400); 
 });
 
-// 미니맵 렌더링 (지그재그 원본 대신 스무딩된 아름다운 궤적을 그림)
 function drawTrackLine() {
-  const line = denseTrackLine;
+  const line = provider.trackLine;
   if (line.length < 2) return;
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   ctx.strokeStyle = '#ffffff';
   ctx.lineWidth = (TRACK_LINE_WIDTH * camera.zoom) + Math.max(4, 6 * camera.zoom);
   ctx.beginPath();
-  let [sx, sy] = toScreen(line[0].x, line[0].y);
+  let [sx, sy] = toScreen(line[0][0], line[0][1]);
   ctx.moveTo(sx, sy);
   for (let i = 1; i < line.length; i++) {
-    let [px, py] = toScreen(line[i].x, line[i].y);
+    let [px, py] = toScreen(line[i][0], line[i][1]);
     ctx.lineTo(px, py);
   }
   ctx.stroke();
@@ -173,7 +150,7 @@ function drawTrackLine() {
   ctx.beginPath();
   ctx.moveTo(sx, sy);
   for (let i = 1; i < line.length; i++) {
-    let [px, py] = toScreen(line[i].x, line[i].y);
+    let [px, py] = toScreen(line[i][0], line[i][1]);
     ctx.lineTo(px, py);
   }
   ctx.stroke();
@@ -190,7 +167,6 @@ function drawCars(states) {
   }
 }
 
-// 🏎️ 진화된 1인칭 FPV 렌더링 엔진 
 function renderFPV(camState, allStates) {
   const fw = viewCockpitWrap.clientWidth;
   const fh = viewCockpitWrap.clientHeight;
@@ -199,7 +175,7 @@ function renderFPV(camState, allStates) {
   fctx.fillStyle = '#55a33c'; fctx.fillRect(0, fh / 2, fw, fh / 2);
 
   if (!camState || !camState.visible || denseTrackLine.length === 0) {
-    cockpitDriverName.textContent = '차량을 선택하세요'; return;
+    cockpitDriverName.textContent = 'Select a driver'; return;
   }
 
   let minDist = Infinity; let startIdx = 0;
@@ -247,6 +223,7 @@ function renderFPV(camState, allStates) {
 
   const backOffset = 15;
   const drawStartIdx = (startIdx - backOffset + denseTrackLine.length) % denseTrackLine.length;
+  
   const lookaheadPoints = 150 + backOffset; 
   const pts = [];
   for (let i = 0; i < lookaheadPoints; i++) {
@@ -260,45 +237,38 @@ function renderFPV(camState, allStates) {
     
     const isDark = Math.floor(p1.d / 8) % 2 === 0; 
     
-    // 📌 폴리곤 오버랩: 캔버스 안티앨리어싱에 의한 미세한 1px 틈(계단현상)을 덮어씌움
-    const overlapY = p2.py - 1.5; 
-    
-    const h = p1.py - overlapY;
+    const h = p1.py - p2.py;
     if (h > 0) {
       fctx.fillStyle = isDark ? '#4c9634' : '#55a33c'; 
-      fctx.fillRect(0, overlapY, fw, h + 2); // 틈을 메꾸기 위한 여유 크기
+      fctx.fillRect(0, p2.py, fw, h + 1.5);
     }
     
     const w1 = (7 / p1.Lz) * fw * 0.8; 
     const w2 = (7 / p2.Lz) * fw * 0.8;
     
-    // 외곽 흰색 테두리 라인
     fctx.fillStyle = '#ffffff';
     fctx.beginPath();
     const outW1 = w1 + (1.8 / p1.Lz) * fw * 0.8;
     const outW2 = w2 + (1.8 / p2.Lz) * fw * 0.8;
     fctx.moveTo(p1.px - outW1, p1.py); fctx.lineTo(p1.px + outW1, p1.py);
-    fctx.lineTo(p2.px + outW2, overlapY); fctx.lineTo(p2.px - outW2, overlapY);
+    fctx.lineTo(p2.px + outW2, p2.py); fctx.lineTo(p2.px - outW2, p2.py);
     fctx.fill();
 
-    // 연석
     fctx.fillStyle = isDark ? '#e74c3c' : '#ffffff'; 
     fctx.beginPath();
     const curbW1 = w1 + (1.2 / p1.Lz) * fw * 0.8;
     const curbW2 = w2 + (1.2 / p2.Lz) * fw * 0.8;
     fctx.moveTo(p1.px - curbW1, p1.py); fctx.lineTo(p1.px + curbW1, p1.py);
-    fctx.lineTo(p2.px + curbW2, overlapY); fctx.lineTo(p2.px - curbW2, overlapY);
+    fctx.lineTo(p2.px + curbW2, p2.py); fctx.lineTo(p2.px - curbW2, p2.py);
     fctx.fill();
 
-    // 아스팔트
     fctx.fillStyle = isDark ? '#333333' : '#3a3a3a';
     fctx.beginPath();
     fctx.moveTo(p1.px - w1, p1.py); fctx.lineTo(p1.px + w1, p1.py);
-    fctx.lineTo(p2.px + w2, overlapY); fctx.lineTo(p2.px - w2, overlapY);
+    fctx.lineTo(p2.px + w2, p2.py); fctx.lineTo(p2.px - w2, p2.py);
     fctx.fill();
   }
 
-  // 4. 주변 차량 그리기
   const carsToDraw = [];
   for (const [dNum, state] of Object.entries(allStates)) {
     if (dNum === followedDriver || !state.visible) continue;
@@ -311,7 +281,6 @@ function renderFPV(camState, allStates) {
     carRenderer.drawRearCar(fctx, c.p.px, c.p.py, scale, c.meta.color, c.state.brk === 1);
   }
 
-  // 5. 내 차의 콕핏 바디 렌더링
   fctx.save();
   fctx.translate(fw / 2, fh);
   const tScale = isFpvMode ? 1.4 : 1.0; 
@@ -343,7 +312,7 @@ function renderFPV(camState, allStates) {
 
 function formatLapTime(seconds) { return seconds == null ? '-' : `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(3).padStart(6, '0')}`; }
 function formatTime(seconds) { return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`; }
-function tyreChipHtml(compound, laps, isCurrent) { const color = COMPOUND_COLORS[compound] || '#888'; const letter = COMPOUND_LETTERS[compound] || '?'; return `<div class="${isCurrent ? 'tyre-chip current' : 'tyre-chip prev'}" style="border-color:${color}; color:${color};" title="${compound || '?'} - ${laps}랩">${laps ?? letter}</div>`; }
+function tyreChipHtml(compound, laps, isCurrent) { const color = COMPOUND_COLORS[compound] || '#888'; const letter = COMPOUND_LETTERS[compound] || '?'; return `<div class="${isCurrent ? 'tyre-chip current' : 'tyre-chip prev'}" style="border-color:${color}; color:${color};" title="${compound || '?'} - ${laps} Laps">${laps ?? letter}</div>`; }
 
 function updateLeaderboard(states) {
   const flaggedDrivers = provider.getFlaggedDrivers(virtualT);
@@ -426,7 +395,6 @@ function updateCockpitHud(states) {
     } else led.className = 'led';
   });
 
-  // 📌 휠 조향각 스무딩 개선
   let currentHeading = state.fpvHeading !== undefined ? state.fpvHeading : state.heading;
 
   if (lastCockpitHeading !== null && lastCockpitVirtualT !== null) {
@@ -438,7 +406,7 @@ function updateCockpitHud(states) {
       let yawRateDeg = (dh * 180 / Math.PI) / dt;
       let targetWheelAngle = -yawRateDeg * 2.5; 
       targetWheelAngle = Math.max(-150, Math.min(150, targetWheelAngle)); 
-      smoothedWheelAngle += (targetWheelAngle - smoothedWheelAngle) * 0.15; // 반응을 더 유려하게 깎음
+      smoothedWheelAngle += (targetWheelAngle - smoothedWheelAngle) * 0.25;
     }
   } else smoothedWheelAngle = 0;
   
@@ -539,8 +507,8 @@ function wirePlaybackControls() {
 }
 
 async function loadSession(filename) {
-  isPlaying = false; btnPlay.textContent = '▶'; statusTextEl.textContent = '세션 데이터 로딩 중...';
-  try { provider = await LocalReplayProvider.load(`data/${filename}`); } catch (err) { statusTextEl.textContent = `로드 실패: ${err.message}`; return; }
+  isPlaying = false; btnPlay.textContent = '▶'; statusTextEl.textContent = 'Loading session data...';
+  try { provider = await LocalReplayProvider.load(`data/${filename}`); } catch (err) { statusTextEl.textContent = `Failed to load: ${err.message}`; return; }
 
   Object.keys(rankHistory).forEach(k => delete rankHistory[k]);
   lastStates = {}; setFollowedDriver(null); 
@@ -551,20 +519,20 @@ async function loadSession(filename) {
 
   virtualT = provider.startTime; timeline.max = Math.max(1, Math.round(provider.duration * 10));
 
-  statusTextEl.innerHTML = `${Object.keys(provider.drivers).length}대 로드 완료.`;
+  statusTextEl.innerHTML = `${Object.keys(provider.drivers).length} cars loaded.`;
   resizeCanvas(); fitToTrack();
 }
 
 async function main() {
   try {
     const res = await fetch('data/index.json');
-    if (!res.ok) throw new Error('index.json 없음');
+    if (!res.ok) throw new Error('Error loading index.json');
     const sessionList = await res.json();
     sessionSelect.innerHTML = '';
     sessionList.forEach(session => { const opt = document.createElement('option'); opt.value = session.filename; opt.textContent = session.name; sessionSelect.appendChild(opt); });
     sessionSelect.addEventListener('change', (e) => { loadSession(e.target.value); });
     if (sessionList.length > 0) await loadSession(sessionList[0].filename);
-  } catch (err) { statusTextEl.textContent = `index.json 오류`; return; }
+  } catch (err) { statusTextEl.textContent = `index.json error`; return; }
 
   wireCameraControls(); wirePlaybackControls(); requestAnimationFrame(tick);
 }
