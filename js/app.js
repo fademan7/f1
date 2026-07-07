@@ -58,9 +58,9 @@ let lastStates = {};
 let followedDriver = null;
 let isFpvMode = false; 
 
-// 🏎️ 3D 엔진용 변수 추가
-let denseTrackLine = []; // 2m 간격으로 촘촘해진 트랙 배열
-let accumulatedDistance = 0; // 차량 이동거리 누적 (바닥 스크롤용)
+// 🏎️ 3D 엔진용 변수
+let denseTrackLine = []; 
+let smoothedCamHeading = null; // 코너 이탈 방지용 부드러운 카메라 방향
 
 const rankHistory = {}; 
 let lastCockpitHeading = null;
@@ -77,21 +77,24 @@ function buildWorldMapper(trackLine) {
   return { dataW, dataH, toWorld(x, y) { return [x - minX, dataH - (y - minY)]; } };
 }
 
-// 📌 원근법 투영을 위해 거친 트랙 데이터를 2m 단위로 부드럽게 쪼개주는 수학 함수
-function densifyTrack(line, interval = 2.0) {
+// 📌 1m 단위 초고밀도 분할 알고리즘 (계단현상 제거 및 정확한 텍스처 거리 계산)
+function densifyTrack(line, interval = 1.0) {
   if (!line || line.length < 2) return line;
   const dense = [];
+  let totalDist = 0;
   for (let i = 0; i < line.length; i++) {
     const p1 = line[i];
     const p2 = line[(i + 1) % line.length];
     const dist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
     const steps = Math.max(1, Math.round(dist / interval));
     for (let j = 0; j < steps; j++) {
-      dense.push([
-        p1[0] + (p2[0] - p1[0]) * (j / steps),
-        p1[1] + (p2[1] - p1[1]) * (j / steps)
-      ]);
+      dense.push({
+        x: p1[0] + (p2[0] - p1[0]) * (j / steps),
+        y: p1[1] + (p2[1] - p1[1]) * (j / steps),
+        d: totalDist + dist * (j / steps) // 출발점부터의 실제 미터(m) 거리
+      });
     }
+    totalDist += dist;
   }
   return dense;
 }
@@ -163,69 +166,80 @@ function drawCars(states) {
 }
 
 // ==========================================
-// 🏎️ 아웃런 스타일 3D 엔진 (Perspective Engine)
+// 🏎️ 진화된 1인칭 FPV 렌더링 엔진 (부드러운 커브 & 실제 속도감)
 // ==========================================
 function renderFPV(camState, allStates) {
   const fw = viewCockpitWrap.clientWidth;
   const fh = viewCockpitWrap.clientHeight;
   
-  // 하늘과 잔디 기본 배경
+  // 하늘(Sky)과 잔디(Grass)
   fctx.fillStyle = '#87CEEB'; fctx.fillRect(0, 0, fw, fh / 2);
-  fctx.fillStyle = '#6ab04c'; fctx.fillRect(0, fh / 2, fw, fh / 2);
+  fctx.fillStyle = '#55a33c'; fctx.fillRect(0, fh / 2, fw, fh / 2);
 
-  if (!camState || !camState.visible) {
+  if (!camState || !camState.visible || denseTrackLine.length === 0) {
     cockpitDriverName.textContent = '차량을 선택하세요'; return;
   }
 
-  const Fx = Math.cos(camState.heading); const Fy = Math.sin(camState.heading);
-  const Rx = Math.sin(camState.heading); const Ry = -Math.cos(camState.heading);
+  // 1. 내 차와 가장 가까운 트랙 노드 탐색
+  let minDist = Infinity; let startIdx = 0;
+  for (let i = 0; i < denseTrackLine.length; i++) {
+    const pt = denseTrackLine[i];
+    const dist = Math.hypot(pt.x - camState.x, pt.y - camState.y);
+    if (dist < minDist) { minDist = dist; startIdx = i; }
+  }
 
+  // 📌 2. 코너 이탈 방지 카메라 로직 (전방 20m를 부드럽게 주시)
+  const lookaheadTargetIdx = (startIdx + 20) % denseTrackLine.length;
+  const targetPt = denseTrackLine[lookaheadTargetIdx];
+  const targetHeading = Math.atan2(targetPt.y - camState.y, targetPt.x - camState.x);
+  
+  if (smoothedCamHeading === null) smoothedCamHeading = targetHeading;
+  let dh = targetHeading - smoothedCamHeading;
+  while (dh > Math.PI) dh -= Math.PI * 2;
+  while (dh < -Math.PI) dh += Math.PI * 2;
+  smoothedCamHeading += dh * 0.15; // 부드러운 카메라 회전 보간
+
+  const Fx = Math.cos(smoothedCamHeading); const Fy = Math.sin(smoothedCamHeading);
+  const Rx = Math.sin(smoothedCamHeading); const Ry = -Math.cos(smoothedCamHeading);
+
+  // 3D 투영 함수 (카메라 너무 가까운 0.1 이하만 렌더링 제외)
   function project(x, y, zOffset = 0) {
     const dx = x - camState.x; const dy = y - camState.y;
     const Lz = dx * Fx + dy * Fy; 
     const Lx = dx * Rx + dy * Ry; 
-    if (Lz < 0.5) return null; 
+    if (Lz < 0.1) return null; 
     const f = 0.8; const camZ = 1.0; 
     const px = fw / 2 + (Lx / Lz) * fw * f;
     const py = fh / 2 + ((camZ - zOffset) / Lz) * fw * f;
     return { px, py, Lz };
   }
 
-  let minDist = Infinity; let startIdx = 0;
-  for (let i = 0; i < denseTrackLine.length; i++) {
-    const [tx, ty] = denseTrackLine[i];
-    const dist = Math.hypot(tx - camState.x, ty - camState.y);
-    if (dist < minDist) { minDist = dist; startIdx = i; }
-  }
-
-  const lookahead = 120; // 240m 전방까지 렌더링
+  // 전방 150미터 렌더링
+  const lookaheadPoints = 150; 
   const pts = [];
-  for (let i = 0; i < lookahead; i++) {
-    const idx = (startIdx + i) % denseTrackLine.length;
-    const [tx, ty] = denseTrackLine[idx];
-    const p = project(tx, ty);
-    if (p) pts.push({...p, i});
+  for (let i = 0; i < lookaheadPoints; i++) {
+    const pt = denseTrackLine[(startIdx + i) % denseTrackLine.length];
+    const p = project(pt.x, pt.y);
+    if (p) pts.push({...p, d: pt.d}); // 미터 단위 절대 거리(d) 포함
   }
-
-  // 📌 바닥 스크롤 효과: 속도(accumulatedDistance)에 따라 패턴을 시프트
-  const shift = Math.floor(accumulatedDistance / 4); 
   
-  // 멀리 있는 곳부터 뒤에서 앞으로 덮어 그리기 (Painter's Algorithm)
+  // 뒤에서 앞으로 그리기
   for (let j = pts.length - 2; j >= 0; j--) {
     const p1 = pts[j]; const p2 = pts[j+1];
-    const isDark = (Math.floor(p1.i / 5) + shift) % 2 === 0; // 10m 단위 줄무늬
     
-    // 1. 잔디 질감
+    // 📌 실제 속도감: 바닥 패턴을 트랙의 절대 거리(d) 기준으로 8m마다 교차
+    const isDark = Math.floor(p1.d / 8) % 2 === 0; 
+    
     const h = p1.py - p2.py;
     if (h > 0) {
-      fctx.fillStyle = isDark ? '#55a33c' : '#6ab04c';
+      fctx.fillStyle = isDark ? '#4c9634' : '#55a33c'; // 잔디 디테일
       fctx.fillRect(0, p2.py, fw, h + 1.5);
     }
     
     const w1 = (7 / p1.Lz) * fw * 0.8; 
     const w2 = (7 / p2.Lz) * fw * 0.8;
     
-    // 2. 연석 (Curbs - 빨강/하양)
+    // 연석 (Curbs)
     fctx.fillStyle = isDark ? '#e74c3c' : '#ffffff'; 
     fctx.beginPath();
     const curbW1 = w1 + (1.5 / p1.Lz) * fw * 0.8;
@@ -234,7 +248,7 @@ function renderFPV(camState, allStates) {
     fctx.lineTo(p2.px + curbW2, p2.py); fctx.lineTo(p2.px - curbW2, p2.py);
     fctx.fill();
 
-    // 3. 아스팔트
+    // 아스팔트
     fctx.fillStyle = isDark ? '#333333' : '#3a3a3a';
     fctx.beginPath();
     fctx.moveTo(p1.px - w1, p1.py); fctx.lineTo(p1.px + w1, p1.py);
@@ -242,7 +256,7 @@ function renderFPV(camState, allStates) {
     fctx.fill();
   }
 
-  // 4. 주변 차량 그리기
+  // 3. 주변 차량 그리기
   const carsToDraw = [];
   for (const [dNum, state] of Object.entries(allStates)) {
     if (dNum === followedDriver || !state.visible) continue;
@@ -255,22 +269,22 @@ function renderFPV(camState, allStates) {
     carRenderer.drawRearCar(fctx, c.p.px, c.p.py, scale, c.meta.color, c.state.brk === 1);
   }
 
-  // 📌 5. 내 차의 프론트 섀시 및 서스펜션 그리기 (화면 하단)
+  // 📌 4. 내 차의 콕핏 바디 및 노즈 렌더링
   fctx.save();
   fctx.translate(fw / 2, fh);
   const tScale = isFpvMode ? 1.4 : 1.0; 
   
   // 프론트 타이어
-  fctx.fillStyle = '#111';
+  fctx.fillStyle = '#0a0a0a';
   fctx.fillRect(-fw * 0.35, -fh * 0.35, fw * 0.12, fh * 0.5); 
   fctx.fillRect(fw * 0.23, -fh * 0.35, fw * 0.12, fh * 0.5); 
   
-  // 서스펜션 암 (카본 뼈대)
-  fctx.strokeStyle = '#222'; fctx.lineWidth = 10;
+  // 서스펜션 암
+  fctx.strokeStyle = '#151515'; fctx.lineWidth = 8;
   fctx.beginPath(); fctx.moveTo(-fw*0.3, -fh*0.25); fctx.lineTo(0, -fh*0.1); fctx.stroke();
   fctx.beginPath(); fctx.moveTo(fw*0.3, -fh*0.25); fctx.lineTo(0, -fh*0.1); fctx.stroke();
 
-  // 노즈 콘 (차체 전면부)
+  // 노즈 콘 (차량 코)
   const teamColor = provider.drivers[followedDriver]?.color || '#ffffff';
   fctx.fillStyle = teamColor;
   fctx.beginPath();
@@ -278,6 +292,17 @@ function renderFPV(camState, allStates) {
   fctx.lineTo(fw * 0.12 * tScale, 0); 
   fctx.lineTo(fw * 0.04 * tScale, -fh * 0.35); 
   fctx.lineTo(-fw * 0.04 * tScale, -fh * 0.35); 
+  fctx.fill();
+
+  // 📌 콕핏 대시보드 인테리어 (바퀴 뜬 느낌 제거)
+  fctx.fillStyle = '#0d0d0f';
+  fctx.beginPath();
+  fctx.moveTo(-fw * 0.5, 0);
+  fctx.lineTo(-fw * 0.5, -fh * 0.45);
+  fctx.lineTo(-fw * 0.25, -fh * 0.25);
+  fctx.quadraticCurveTo(0, -fh * 0.1, fw * 0.25, -fh * 0.25);
+  fctx.lineTo(fw * 0.5, -fh * 0.45);
+  fctx.lineTo(fw * 0.5, 0);
   fctx.fill();
   
   fctx.restore();
@@ -344,7 +369,8 @@ function updateTopPanelInfo(states) {
 
 function updateCockpitHud(states) {
   const state = followedDriver ? states[followedDriver] : null;
-  const scaleFactor = isFpvMode ? 1.6 : 0.65;
+  // 📌 화면 모드에 맞춰 스티어링 휠 거대화 (FPV 모드 시 1.8배)
+  const scaleFactor = isFpvMode ? 1.8 : 0.65;
   const ty = isFpvMode ? -20 : 40;
 
   if (!state || !state.visible) {
@@ -383,7 +409,7 @@ function updateCockpitHud(states) {
   
   lastCockpitHeading = state.heading; lastCockpitVirtualT = virtualT;
   
-  // 📌 자바스크립트에서 휠의 Scale과 Rotate를 동시에 동적으로 할당
+  // 휠 스케일 및 회전 적용
   f1Wheel.style.transform = `scale(${scaleFactor}) translateY(${ty}px) rotate(${smoothedWheelAngle}deg)`;
 }
 
@@ -412,11 +438,6 @@ function tick(nowMs) {
     virtualT += deltaSec * playbackSpeed;
     const endT = provider.startTime + provider.duration;
     if (virtualT > endT) virtualT = endT;
-
-    // 📌 바닥 스크롤용 차량 속도 누적 연산 (km/h -> m/s)
-    if (followedDriver && lastStates[followedDriver]) {
-      accumulatedDistance += (lastStates[followedDriver].v / 3.6) * deltaSec * playbackSpeed;
-    }
   }
 
   const states = provider.getStateAt(virtualT);
@@ -444,7 +465,7 @@ function zoomAt(screenX, screenY, zoomFactor) {
 
 function setFollowedDriver(driverNum) {
   followedDriver = driverNum || null;
-  smoothedWheelAngle = 0; lastCockpitHeading = null;
+  smoothedWheelAngle = 0; lastCockpitHeading = null; smoothedCamHeading = null;
 }
 
 function handleCanvasClick(clientX, clientY) {
@@ -486,10 +507,9 @@ async function loadSession(filename) {
   lastStates = {}; setFollowedDriver(null); 
   worldMapper = buildWorldMapper(provider.trackLine);
   
-  // 📌 3D 엔진용 2미터 간격 촘촘한 트랙 배열 생성
-  denseTrackLine = densifyTrack(provider.trackLine, 2.0);
-  accumulatedDistance = 0;
-
+  // 📌 1미터 간격 초고밀도 배열 생성
+  denseTrackLine = densifyTrack(provider.trackLine, 1.0);
+  
   virtualT = provider.startTime; timeline.max = Math.max(1, Math.round(provider.duration * 10));
 
   statusTextEl.innerHTML = `${Object.keys(provider.drivers).length}대 로드 완료.`;
