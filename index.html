@@ -3,93 +3,151 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>F1 Telemetry Viewer</title>
+<title>F1 Telemetry Viewer | Advanced Data Dashboard</title>
+<!-- F1 및 기술 대시보드에 어울리는 Titillium Web 폰트 로드 -->
 <style>
-  html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #0b0e13; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
+  @import url('https://fonts.googleapis.com/css2?family=Titillium+Web:ital,wght@0,300;0,400;0,600;0,700;1,400;1,700&display=swap');
+
+  html, body { 
+    margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; 
+    font-family: 'Titillium Web', sans-serif;
+    background: radial-gradient(circle at 50% 50%, #111522 0%, #05070a 100%);
+    color: #e0e6ed;
+  }
   
-  .view-layer { position: absolute; transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1); overflow: hidden; }
+  /* 배경 미세 그리드 패턴 (엔지니어링 툴 느낌) */
+  body::before {
+    content: ''; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+    background-image: linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 40px 40px; pointer-events: none; z-index: 0;
+  }
+
+  .view-layer { position: absolute; transition: all 0.5s cubic-bezier(0.25, 1, 0.5, 1); overflow: hidden; }
   canvas { display: block; width: 100%; height: 100%; }
 
   body:not(.fpv-mode) #view-map { top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; border-radius: 0; }
-  body:not(.fpv-mode) #view-cockpit { bottom: 20px; right: 16px; width: 340px; height: 220px; z-index: 20; border-radius: 12px; border: 2px solid rgba(255,255,255,0.2); box-shadow: 0 10px 30px rgba(0,0,0,0.8); background: #000; }
+  body:not(.fpv-mode) #view-cockpit { 
+    bottom: 24px; right: 24px; width: 360px; height: 240px; z-index: 20; 
+    border-radius: 16px; border: 1px solid rgba(255,255,255,0.1); 
+    box-shadow: 0 16px 40px rgba(0,0,0,0.8), 0 0 20px rgba(0,150,255,0.1); 
+    background: #000; 
+  }
 
   body.fpv-mode #view-cockpit { top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; border-radius: 0; border: none; background: #000; }
-  body.fpv-mode #view-map { bottom: 20px; right: 16px; width: 340px; height: 220px; z-index: 20; border-radius: 12px; border: 2px solid rgba(255,255,255,0.2); box-shadow: 0 10px 30px rgba(0,0,0,0.8); }
+  body.fpv-mode #view-map { 
+    bottom: 24px; right: 24px; width: 360px; height: 240px; z-index: 20; 
+    border-radius: 16px; border: 1px solid rgba(255,255,255,0.1); 
+    box-shadow: 0 16px 40px rgba(0,0,0,0.8), 0 0 20px rgba(0,150,255,0.1); 
+    background: radial-gradient(circle at 50% 50%, #111522 0%, #05070a 100%);
+  }
 
-  .ui-layer { position: absolute; z-index: 30; color: #eee; background: rgba(10, 12, 16, 0.85); border-radius: 8px; padding: 10px 14px; border: 1px solid rgba(255,255,255,0.05); }
+  /* 글래스모피즘(Glassmorphism) 고급 패널 효과 */
+  .ui-layer { 
+    position: absolute; z-index: 30; 
+    background: rgba(10, 14, 25, 0.6); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border-radius: 12px; padding: 12px 16px; 
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
 
-  #top-info-panel { top: 16px; left: 16px; display: flex; align-items: center; gap: 12px; padding: 8px 14px; font-weight: bold; font-size: 15px; }
-  #flag-indicator { width: 16px; height: 16px; border-radius: 4px; background: #2ecc71; box-shadow: 0 0 8px rgba(0,0,0,0.5); }
-  #btn-view-switch { background: #e67e22; color: #fff; border: none; font-weight: bold; border-radius: 4px; padding: 4px 10px; cursor: pointer; transition: 0.2s; }
-  #btn-view-switch:hover { background: #d35400; }
+  #top-info-panel { top: 20px; left: 20px; display: flex; align-items: center; gap: 16px; font-weight: 600; font-size: 16px; letter-spacing: 0.5px; }
+  #flag-indicator { width: 18px; height: 18px; border-radius: 50%; background: #2ecc71; box-shadow: 0 0 12px rgba(46, 204, 113, 0.6); }
+  
+  button, select { 
+    font-family: 'Titillium Web', sans-serif; font-weight: 600; font-size: 13px; text-transform: uppercase;
+    padding: 6px 14px; background: linear-gradient(180deg, #1e253c 0%, #151a2a 100%); color: #fff; 
+    border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; cursor: pointer; transition: all 0.2s; 
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  }
+  button:hover, select:hover { background: linear-gradient(180deg, #2a3454 0%, #1e253c 100%); border-color: rgba(255,255,255,0.3); }
+  
+  #btn-view-switch { background: linear-gradient(180deg, #e67e22 0%, #d35400 100%); border: 1px solid #ff9f43; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+  #btn-view-switch:hover { background: linear-gradient(180deg, #ff9f43 0%, #e67e22 100%); box-shadow: 0 0 15px rgba(230, 126, 34, 0.4); }
 
-  #leaderboard { top: 70px; left: 16px; width: 300px; max-height: calc(100vh - 120px); overflow: hidden; padding: 6px 10px; }
-  #leaderboard h4 { margin: 0 0 4px 2px; font-size: 11px; color: #888; font-weight: normal; text-transform: uppercase; letter-spacing: 0.5px; }
-  #leaderboard-list { display: flex; flex-direction: column; gap: 2px; }
+  #leaderboard { top: 80px; left: 20px; width: 320px; max-height: calc(100vh - 140px); overflow: hidden; padding: 10px 14px; }
+  #leaderboard h4 { margin: 0 0 8px 4px; font-size: 12px; color: #7f8fa6; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; }
+  #leaderboard-list { display: flex; flex-direction: column; gap: 4px; }
 
-  .lb-row { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 5px; cursor: pointer; background: rgba(255,255,255,0.02); transition: background 0.1s; }
-  .lb-row:hover { background: rgba(255,255,255,0.08); }
-  .lb-row.followed { background: rgba(255,230,60,0.15); outline: 1px solid rgba(255,230,60,0.5); }
-  .lb-row.dnf { opacity: 0.35; filter: grayscale(100%); }
+  .lb-row { 
+    display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 6px; cursor: pointer; 
+    background: rgba(255,255,255,0.02); transition: all 0.15s; border-left: 3px solid transparent;
+  }
+  .lb-row:hover { background: rgba(255,255,255,0.06); transform: translateX(2px); }
+  
+  /* 선택된 드라이버 형광 하이라이트 */
+  .lb-row.followed { 
+    background: linear-gradient(90deg, rgba(52, 152, 219, 0.15) 0%, transparent 100%); 
+    border-left: 3px solid #3498db; 
+    box-shadow: inset 20px 0 20px -20px rgba(52, 152, 219, 0.5);
+  }
+  .lb-row.dnf { opacity: 0.3; filter: grayscale(100%); }
 
-  .lb-pos-container { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 28px; flex-shrink: 0; }
-  .rank-arrow { font-size: 10px; height: 12px; line-height: 12px; font-family: monospace; }
-  .rank-arrow.up { color: #2ecc71; }
-  .rank-arrow.down { color: #e74c3c; }
-  .lb-pos { font-weight: bold; color: #aaa; font-size: 12px; }
+  .lb-pos-container { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 24px; flex-shrink: 0; }
+  .rank-arrow { font-size: 10px; height: 12px; line-height: 12px; }
+  .rank-arrow.up { color: #2ecc71; text-shadow: 0 0 5px rgba(46,204,113,0.5); }
+  .rank-arrow.down { color: #e74c3c; text-shadow: 0 0 5px rgba(231,76,60,0.5); }
+  .lb-pos { font-weight: 700; color: #b2bec3; font-size: 14px; }
 
-  .lb-main { display: flex; flex-direction: column; flex-grow: 1; gap: 2px; }
+  .lb-main { display: flex; flex-direction: column; flex-grow: 1; gap: 1px; }
   .lb-top-line { display: flex; align-items: center; justify-content: space-between; }
   .lb-bottom-line { display: flex; align-items: center; justify-content: space-between; }
   
-  .lb-left { display: flex; align-items: center; gap: 5px; }
-  .lb-name { font-weight: bold; font-size: 13px; }
-  .lb-times { font-size: 10px; color: #999; font-variant-numeric: tabular-nums; }
+  .lb-left { display: flex; align-items: center; gap: 6px; }
+  .lb-name { font-weight: 700; font-size: 15px; letter-spacing: 0.5px; color: #fff; }
+  .lb-times { font-size: 11px; color: #7f8fa6; font-variant-numeric: tabular-nums; font-weight: 600; }
 
-  .lb-tag { font-size: 9px; font-weight: bold; padding: 1px 3px; border-radius: 3px; }
-  .lb-tag.fl { background: #a020f0; color: #fff; }
-  .lb-tag.bw { background: #111; color: #fff; border: 1px solid #fff; }
-  .lb-tag.drs { background: #2ecc71; color: #000; }
+  .lb-tag { font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px; letter-spacing: 0.5px; }
+  .lb-tag.fl { background: #9b59b6; color: #fff; box-shadow: 0 0 8px rgba(155,89,182,0.6); }
+  .lb-tag.drs { background: #2ecc71; color: #000; box-shadow: 0 0 8px rgba(46,204,113,0.6); }
 
-  .tyre-chip { width: 14px; height: 14px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: bold; background: transparent; border: 2px solid; flex-shrink: 0; box-sizing: border-box; }
-  .tyre-chip.current { width: 17px; height: 17px; font-size: 9px; border-width: 2.5px; }
-  .tyre-chip.prev { opacity: 0.5; }
+  .tyre-chip { width: 16px; height: 16px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; background: transparent; border: 2px solid; flex-shrink: 0; box-sizing: border-box; }
+  .tyre-chip.current { width: 18px; height: 18px; font-size: 10px; border-width: 2.5px; box-shadow: inset 0 0 4px rgba(0,0,0,0.5); }
+  .tyre-chip.prev { opacity: 0.4; }
 
   .fpv-overlay-container { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; pointer-events: none; }
-  #cockpit-driver-name { font-size: 18px; font-weight: bold; text-shadow: 0 2px 4px rgba(0,0,0,0.9); margin-bottom: 20px; color: #fff; z-index: 5; }
+  
+  /* 콕핏 텍스트 사이버틱하게 변경 */
+  #cockpit-driver-name { 
+    font-size: 22px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+    text-shadow: 0 2px 10px rgba(0,0,0,0.9), 0 0 20px rgba(255,255,255,0.2); 
+    margin-bottom: 24px; color: #fff; z-index: 5; 
+  }
   
   .f1-wheel { width: 250px; height: 140px; position: relative; display: flex; justify-content: center; align-items: center; transition: transform 0.05s linear; transform-origin: center center; z-index: 5; }
-  .f1-grip { position: absolute; width: 50px; height: 100%; background: #1a1b1e; box-shadow: inset 0 0 12px rgba(0,0,0,0.9), 0 5px 15px rgba(0,0,0,0.5); z-index: 1; }
-  .f1-grip.left { left: 0; border-radius: 25px 8px 8px 25px; border-left: 2px solid #333; }
-  .f1-grip.right { right: 0; border-radius: 8px 25px 25px 8px; border-right: 2px solid #333; }
+  .f1-grip { position: absolute; width: 50px; height: 100%; background: #111; box-shadow: inset 0 0 15px rgba(0,0,0,1), 0 10px 25px rgba(0,0,0,0.8); z-index: 1; }
+  .f1-grip.left { left: 0; border-radius: 25px 8px 8px 25px; border-left: 2px solid #444; }
+  .f1-grip.right { right: 0; border-radius: 8px 25px 25px 8px; border-right: 2px solid #444; }
   
-  .f1-center-plate { width: 170px; height: 110px; background: linear-gradient(135deg, #2a2a2a, #111); border-radius: 12px; position: relative; z-index: 2; padding: 8px; box-sizing: border-box; box-shadow: 0 6px 15px rgba(0,0,0,0.8), inset 0 1px 1px rgba(255,255,255,0.1); }
-  .f1-lcd { width: 100%; height: 100%; background: #000; border-radius: 6px; border: 2px solid #000; box-shadow: inset 0 0 10px rgba(255,255,255,0.1); display: flex; flex-direction: column; overflow: hidden; }
-  .f1-led-bar { display: flex; justify-content: space-between; padding: 4px 6px; background: #0a0a0a; border-bottom: 1px solid #222; }
-  .led { width: 6px; height: 6px; border-radius: 50%; background: #222; transition: background 0.05s; }
-  .led.on.green { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
-  .led.on.red { background: #e74c3c; box-shadow: 0 0 6px #e74c3c; }
-  .led.on.blue { background: #3498db; box-shadow: 0 0 6px #3498db; }
+  .f1-center-plate { 
+    width: 170px; height: 110px; border-radius: 12px; position: relative; z-index: 2; padding: 8px; box-sizing: border-box; 
+    background: linear-gradient(135deg, #1e222d, #0b0d14);
+    box-shadow: 0 10px 25px rgba(0,0,0,0.9), inset 0 1px 2px rgba(255,255,255,0.15); 
+    border: 1px solid #333;
+  }
+  .f1-lcd { width: 100%; height: 100%; background: #000; border-radius: 6px; border: 1px solid #111; box-shadow: inset 0 0 15px rgba(0,150,255,0.05); display: flex; flex-direction: column; overflow: hidden; }
+  .f1-led-bar { display: flex; justify-content: space-between; padding: 5px 8px; background: #05070a; border-bottom: 1px solid #1a1f2e; }
+  .led { width: 7px; height: 7px; border-radius: 50%; background: #111; transition: all 0.05s; }
+  .led.on.green { background: #2ecc71; box-shadow: 0 0 8px #2ecc71, inset 0 0 2px #fff; }
+  .led.on.red { background: #e74c3c; box-shadow: 0 0 8px #e74c3c, inset 0 0 2px #fff; }
+  .led.on.blue { background: #3498db; box-shadow: 0 0 8px #3498db, inset 0 0 2px #fff; }
 
   .lcd-data-area { display: flex; flex-grow: 1; }
-  .lcd-gear { width: 40%; display: flex; align-items: center; justify-content: center; font-size: 42px; font-weight: bold; color: #f1c40f; border-right: 1px solid #222; }
-  .lcd-stats { width: 60%; display: flex; flex-direction: column; justify-content: center; padding-left: 8px; gap: 4px; }
+  .lcd-gear { width: 40%; display: flex; align-items: center; justify-content: center; font-size: 48px; font-weight: 700; color: #f1c40f; text-shadow: 0 0 15px rgba(241,196,15,0.4); border-right: 1px solid #1a1f2e; line-height: 1; }
+  .lcd-stats { width: 60%; display: flex; flex-direction: column; justify-content: center; padding-left: 10px; gap: 2px; }
   .stat-row { display: flex; flex-direction: column; }
-  .stat-label { font-size: 8px; color: #888; text-transform: uppercase; }
-  .stat-val { font-size: 16px; font-weight: bold; color: #fff; font-variant-numeric: tabular-nums; }
+  .stat-label { font-size: 9px; color: #576574; text-transform: uppercase; font-weight: 600; letter-spacing: 1px; }
+  .stat-val { font-size: 18px; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; line-height: 1; }
   
-  .lcd-pedals { display: flex; height: 8px; }
-  .pedal-bar { height: 100%; width: 50%; display: flex; align-items: flex-end; background: #111; border-top: 1px solid #333; }
+  .lcd-pedals { display: flex; height: 10px; }
+  .pedal-bar { height: 100%; width: 50%; display: flex; align-items: flex-end; background: #0a0e14; border-top: 1px solid #1a1f2e; }
   .pedal-fill { height: 100%; width: 0%; transition: width 0.05s; }
-  .thr-fill { background: #2ecc71; }
-  .brk-fill { background: #e74c3c; }
+  .thr-fill { background: #2ecc71; box-shadow: 0 0 8px rgba(46,204,113,0.5); }
+  .brk-fill { background: #e74c3c; box-shadow: 0 0 8px rgba(231,76,60,0.5); }
 
-  #playback-controls { bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; width: min(720px, 90vw); }
-  #timeline { flex-grow: 1; cursor: pointer; }
-  button, select { padding: 6px 12px; background: #2a2f3a; color: #fff; border: 1px solid #444; border-radius: 4px; cursor: pointer; }
-  button:hover, select:hover { background: #3a4050; }
-  #time-display { font-variant-numeric: tabular-nums; white-space: nowrap; }
-  #status { top: 16px; right: 16px; font-size: 11px; color: #888; background: transparent; border: none; padding: 0; }
+  #playback-controls { bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; width: min(760px, 90vw); }
+  #timeline { flex-grow: 1; cursor: pointer; accent-color: #3498db; }
+  #time-display { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; color: #b2bec3; }
+  #status { top: 20px; right: 20px; font-size: 12px; color: #7f8fa6; background: transparent; border: none; padding: 0; box-shadow: none; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
 </style>
 </head>
 <body>
@@ -101,7 +159,7 @@
   <div id="view-cockpit" class="view-layer">
     <canvas id="fpv-canvas"></canvas>
     <div class="fpv-overlay-container">
-      <div id="cockpit-driver-name">Select a driver</div>
+      <div id="cockpit-driver-name">AWAITING TELEMETRY</div>
       <div class="f1-wheel" id="f1-wheel">
         <div class="f1-grip left"></div>
         <div class="f1-center-plate">
@@ -120,7 +178,7 @@
             </div>
             <div class="lcd-pedals">
               <div class="pedal-bar"><div class="pedal-fill brk-fill" id="cp-brk"></div></div>
-              <div class="pedal-bar" style="border-left: 1px solid #333;"><div class="pedal-fill thr-fill" id="cp-thr"></div></div>
+              <div class="pedal-bar" style="border-left: 1px solid #1a1f2e;"><div class="pedal-fill thr-fill" id="cp-thr"></div></div>
             </div>
           </div>
         </div>
@@ -130,20 +188,20 @@
   </div>
 
   <div id="top-info-panel" class="ui-layer">
-    <button id="btn-view-switch">🔄 Toggle View</button>
-    <select id="session-select" style="padding: 4px; background: #2a2f3a; color: #fff; border: 1px solid #444; border-radius: 4px; font-weight: bold; cursor: pointer;">
-      <option value="">Loading data...</option>
+    <button id="btn-view-switch">View: HUD</button>
+    <select id="session-select">
+      <option value="">INITIALIZING...</option>
     </select>
-    <div id="lap-text">Lap - / -</div>
+    <div id="lap-text">LAP - / -</div>
     <div id="flag-indicator" title="Track Status"></div>
   </div>
 
   <div id="leaderboard" class="ui-layer">
-    <h4>Leaderboard</h4>
+    <h4>Live Timing</h4>
     <div id="leaderboard-list"></div>
   </div>
 
-  <div id="status" class="ui-layer"><div id="status-text">Loading session data...</div></div>
+  <div id="status" class="ui-layer"><div id="status-text">CONNECTING TO DATA STREAM...</div></div>
 
   <div id="playback-controls" class="ui-layer">
     <button id="btn-play">▶</button>
