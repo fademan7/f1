@@ -41,7 +41,7 @@ const TRACK_STATUS_LABELS = {
   '4': { label: 'SC', color: '#f39c12' }, '5': { label: 'RED', color: '#e74c3c' },
   '6': { label: 'VSC', color: '#f39c12' }, '7': { label: 'VSC END', color: '#e0a030' },
 };
-const COMPOUND_COLORS = { SOFT: '#e30613', MEDIUM: '#f9c000', HARD: '#ffffff', INTERMEDIATE: '#2ecc71', WET: '#3498db' };
+const COMPOUND_COLORS = { SOFT: '#e74c3c', MEDIUM: '#f1c40f', HARD: '#ecf0f1', INTERMEDIATE: '#2ecc71', WET: '#3498db' };
 const COMPOUND_LETTERS = { SOFT: 'S', MEDIUM: 'M', HARD: 'H', INTERMEDIATE: 'I', WET: 'W' };
 
 let provider = null;
@@ -79,7 +79,6 @@ function buildWorldMapper(trackLine) {
 function densifyTrack(line, interval = 1.0) {
   if (!line || line.length < 2) return line;
   let dense = [];
-  
   for (let i = 0; i < line.length; i++) {
     const p1 = line[i];
     const p2 = line[(i + 1) % line.length];
@@ -140,15 +139,22 @@ function resizeCanvas() {
 btnViewSwitch.addEventListener('click', () => {
   isFpvMode = !isFpvMode;
   document.body.classList.toggle('fpv-mode', isFpvMode);
+  btnViewSwitch.textContent = isFpvMode ? 'View: MAP' : 'View: HUD';
   setTimeout(() => { resizeCanvas(); fitToTrack(); }, 400); 
 });
 
 function drawTrackLine() {
   const line = denseTrackLine;
   if (line.length < 2) return;
+  
+  // 📌 미니맵 네온 글로우 효과 (사이버네틱 스타일)
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = (TRACK_LINE_WIDTH * camera.zoom) + Math.max(4, 6 * camera.zoom);
+  
+  // 외부 아우라
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  ctx.lineWidth = (TRACK_LINE_WIDTH * camera.zoom) + 12;
+  ctx.shadowBlur = 20;
+  ctx.shadowColor = 'rgba(52, 152, 219, 0.8)';
   ctx.beginPath();
   let [sx, sy] = toScreen(line[0].x, line[0].y);
   ctx.moveTo(sx, sy);
@@ -158,7 +164,9 @@ function drawTrackLine() {
   }
   ctx.stroke();
 
-  ctx.strokeStyle = '#333333';
+  // 내부 아스팔트 라인
+  ctx.shadowBlur = 0; // 초기화
+  ctx.strokeStyle = '#1e253c';
   ctx.lineWidth = TRACK_LINE_WIDTH * camera.zoom;
   ctx.beginPath();
   ctx.moveTo(sx, sy);
@@ -167,6 +175,19 @@ function drawTrackLine() {
     ctx.lineTo(px, py);
   }
   ctx.stroke();
+
+  // 중앙 레코드 라인 (얇은 선)
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+  ctx.lineWidth = Math.max(1, camera.zoom * 2);
+  ctx.setLineDash([10, 10]);
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  for (let i = 1; i < line.length; i++) {
+    let [px, py] = toScreen(line[i].x, line[i].y);
+    ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
 }
 
 function drawCars(states) {
@@ -197,15 +218,17 @@ function calculateCarProgress(states) {
   }
 }
 
+// 📌 텔레메트리 다크모드 뷰어 엔진
 function renderFPV(camState, allStates) {
   const fw = viewCockpitWrap.clientWidth;
   const fh = viewCockpitWrap.clientHeight;
   
-  fctx.fillStyle = '#87CEEB'; fctx.fillRect(0, 0, fw, fh / 2);
-  fctx.fillStyle = '#55a33c'; fctx.fillRect(0, fh / 2, fw, fh / 2);
+  // 하늘(심해 블루/블랙)과 지면(어두운 그리드 톤)
+  fctx.fillStyle = '#06080D'; fctx.fillRect(0, 0, fw, fh / 2);
+  fctx.fillStyle = '#08100A'; fctx.fillRect(0, fh / 2, fw, fh / 2);
 
   if (!camState || !camState.visible || denseTrackLine.length === 0) {
-    cockpitDriverName.textContent = 'Select a driver'; return;
+    cockpitDriverName.textContent = 'AWAITING TELEMETRY'; return;
   }
 
   let minD = Infinity; let myIdx = 0;
@@ -234,7 +257,6 @@ function renderFPV(camState, allStates) {
   for (let Lz = maxLz; Lz >= 2; Lz -= segLen) {
     let z1 = Lz - shift;
     let z2 = z1 + segLen;
-    
     if (z1 < 0.5) continue;
     
     let isDark = Math.floor((accumulatedDistance + z1) / 8) % 2 === 0;
@@ -250,26 +272,30 @@ function renderFPV(camState, allStates) {
     const overlapY = py2 - 1.5; 
     const h = Math.max(0, py1 - overlapY);
     
+    // 지면 와이어프레임 & 텍스처
     if (h > 0) {
-      fctx.fillStyle = isDark ? '#4c9634' : '#55a33c'; 
+      fctx.fillStyle = isDark ? '#0A140C' : '#0D1A10'; 
       fctx.fillRect(0, overlapY, fw, h + 2);
     }
     
-    fctx.fillStyle = '#ffffff';
+    // 테두리 글로우 효과(가상의 차선)
+    fctx.fillStyle = isDark ? '#3498db' : '#2980b9';
     fctx.beginPath();
     let outW1 = w1 + (1.8 / z1) * fw * 0.8; let outW2 = w2 + (1.8 / z2) * fw * 0.8;
     fctx.moveTo(px1 - outW1, py1); fctx.lineTo(px1 + outW1, py1);
     fctx.lineTo(px2 + outW2, overlapY); fctx.lineTo(px2 - outW2, overlapY);
     fctx.fill();
 
-    fctx.fillStyle = isDark ? '#e74c3c' : '#ffffff'; 
+    // 연석 (네온 레드 & 다크 화이트)
+    fctx.fillStyle = isDark ? '#D92020' : '#888888'; 
     fctx.beginPath();
     let curbW1 = w1 + (1.2 / z1) * fw * 0.8; let curbW2 = w2 + (1.2 / z2) * fw * 0.8;
     fctx.moveTo(px1 - curbW1, py1); fctx.lineTo(px1 + curbW1, py1);
     fctx.lineTo(px2 + curbW2, overlapY); fctx.lineTo(px2 - curbW2, overlapY);
     fctx.fill();
 
-    fctx.fillStyle = isDark ? '#333333' : '#3a3a3a';
+    // 아스팔트 (딥 다크 그레이)
+    fctx.fillStyle = isDark ? '#181A1F' : '#20232A';
     fctx.beginPath();
     fctx.moveTo(px1 - w1, py1); fctx.lineTo(px1 + w1, py1);
     fctx.lineTo(px2 + w2, overlapY); fctx.lineTo(px2 - w2, overlapY);
@@ -306,15 +332,16 @@ function renderFPV(camState, allStates) {
     carRenderer.drawRearCar(fctx, c.px, c.py, scale, c.meta.color, c.brk === 1);
   }
 
+  // 앞바퀴 노즈콘 렌더링 수정
   fctx.save();
   fctx.translate(fw / 2, fh);
   const tScale = isFpvMode ? 1.4 : 1.0; 
   
-  fctx.fillStyle = '#0a0a0a';
+  fctx.fillStyle = '#050505';
   fctx.fillRect(-fw * 0.35, -fh * 0.35, fw * 0.12, fh * 0.5); 
   fctx.fillRect(fw * 0.23, -fh * 0.35, fw * 0.12, fh * 0.5); 
   
-  fctx.strokeStyle = '#151515'; fctx.lineWidth = 8;
+  fctx.strokeStyle = '#111'; fctx.lineWidth = 8;
   fctx.beginPath(); fctx.moveTo(-fw*0.3, -fh*0.25); fctx.lineTo(0, -fh*0.1); fctx.stroke();
   fctx.beginPath(); fctx.moveTo(fw*0.3, -fh*0.25); fctx.lineTo(0, -fh*0.1); fctx.stroke();
 
@@ -325,7 +352,7 @@ function renderFPV(camState, allStates) {
   fctx.lineTo(fw * 0.04 * tScale, -fh * 0.35); fctx.lineTo(-fw * 0.04 * tScale, -fh * 0.35); 
   fctx.fill();
 
-  fctx.fillStyle = '#0d0d0f';
+  fctx.fillStyle = '#0a0d14';
   fctx.beginPath();
   fctx.moveTo(-fw * 0.5, 0); fctx.lineTo(-fw * 0.5, -fh * 0.45);
   fctx.lineTo(-fw * 0.25, -fh * 0.25); fctx.quadraticCurveTo(0, -fh * 0.1, fw * 0.25, -fh * 0.25);
@@ -380,7 +407,6 @@ function updateLeaderboard(states) {
     const currentTyre = r.lapInfo.currentCompound ? tyreChipHtml(r.lapInfo.currentCompound, r.lapInfo.currentTyreLife, true) : '';
     const prevTyres = r.lapInfo.previousStints.map((s) => tyreChipHtml(s.compound, s.laps, false)).join('');
 
-    // Gap UI 제거 완료
     return `<div class="${rowClasses.join(' ')}" data-driver="${r.dNum}">
         <div class="lb-pos-container">${rankArrowHtml}<div class="lb-pos">${posLabel}</div></div>
         <div class="lb-main">
@@ -409,7 +435,7 @@ function updateTopPanelInfo(states) {
     const lapInfo = provider.getLapInfo(driverNum, virtualT);
     if (lapInfo && lapInfo.lapsCompleted > maxLap) maxLap = lapInfo.lapsCompleted;
   }
-  lapTextEl.textContent = `Lap ${Math.max(1, maxLap + 1)} / ${provider.totalLaps || '?'}`;
+  lapTextEl.textContent = `LAP ${Math.max(1, maxLap + 1)} / ${provider.totalLaps || '?'}`;
 }
 
 function updateCockpitHud(states) {
@@ -426,7 +452,7 @@ function updateCockpitHud(states) {
   }
   
   const meta = provider.drivers[followedDriver] || {};
-  cockpitDriverName.textContent = `${meta.code || followedDriver} · ${meta.team || ''}`;
+  cockpitDriverName.textContent = `${meta.code || followedDriver} // ${meta.team || 'DATA STREAM'}`;
   cpSpeed.textContent = Math.round(state.v); cpGear.textContent = state.gear > 0 ? state.gear : 'N'; cpRpm.textContent = Math.round(state.rpm);
   cpThr.style.width = `${Math.max(0, Math.min(100, state.thr))}%`; cpBrk.style.width = state.brk ? '100%' : '0%';
 
@@ -438,9 +464,8 @@ function updateCockpitHud(states) {
     } else led.className = 'led';
   });
 
-  // 📌 휠 역방향(-) 수정 및 조향 한계 증폭 (60,000 -> 150,000)
   let wheelAngle = -(currentCurve * 150000); 
-  wheelAngle = Math.max(-160, Math.min(160, wheelAngle)); // 클리핑 방지 처리
+  wheelAngle = Math.max(-160, Math.min(160, wheelAngle)); 
   
   f1Wheel.style.transform = `scale(${scaleFactor}) translateY(${ty}px) rotate(${wheelAngle}deg)`;
 }
@@ -537,8 +562,8 @@ function wirePlaybackControls() {
 }
 
 async function loadSession(filename) {
-  isPlaying = false; btnPlay.textContent = '▶'; statusTextEl.textContent = 'Loading session data...';
-  try { provider = await LocalReplayProvider.load(`data/${filename}`); } catch (err) { statusTextEl.textContent = `Failed to load: ${err.message}`; return; }
+  isPlaying = false; btnPlay.textContent = '▶'; statusTextEl.textContent = 'INITIALIZING DATA...';
+  try { provider = await LocalReplayProvider.load(`data/${filename}`); } catch (err) { statusTextEl.textContent = `SYS ERR: ${err.message}`; return; }
 
   Object.keys(rankHistory).forEach(k => delete rankHistory[k]);
   lastStates = {}; setFollowedDriver(null); 
@@ -549,7 +574,7 @@ async function loadSession(filename) {
 
   virtualT = provider.startTime; timeline.max = Math.max(1, Math.round(provider.duration * 10));
 
-  statusTextEl.innerHTML = `${Object.keys(provider.drivers).length} cars loaded.`;
+  statusTextEl.innerHTML = `STREAM ACTIVE / ${Object.keys(provider.drivers).length} NODES`;
   resizeCanvas(); fitToTrack();
 }
 
@@ -562,7 +587,7 @@ async function main() {
     sessionList.forEach(session => { const opt = document.createElement('option'); opt.value = session.filename; opt.textContent = session.name; sessionSelect.appendChild(opt); });
     sessionSelect.addEventListener('change', (e) => { loadSession(e.target.value); });
     if (sessionList.length > 0) await loadSession(sessionList[0].filename);
-  } catch (err) { statusTextEl.textContent = `index.json error`; return; }
+  } catch (err) { statusTextEl.textContent = `SYS ERR: index.json missing`; return; }
 
   wireCameraControls(); wirePlaybackControls(); requestAnimationFrame(tick);
 }
